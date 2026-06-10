@@ -62,6 +62,12 @@ pub struct CredentialStatusItem {
     pub disabled_reason: Option<String>,
     /// 端点名称（决定该凭据走哪套 Kiro API，已回退到默认端点）
     pub endpoint: String,
+    /// 凭据级 Auth Region（用于 token 刷新）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_region: Option<String>,
+    /// 凭据级 API Region（用于 API 请求）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_region: Option<String>,
 }
 
 // ============ 操作请求 ============
@@ -330,4 +336,50 @@ impl AdminErrorResponse {
     pub fn internal_error(message: impl Into<String>) -> Self {
         Self::new("internal_error", message)
     }
+}
+
+// ============ 凭据更新（PATCH） ============
+
+/// 更新凭据请求
+///
+/// 所有字段可选；`Some(value)` 表示设置/覆盖，`None` 表示保持现值。
+/// 对于代理字段，传入空字符串表示清空。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCredentialRequest {
+    pub email: Option<String>,
+    pub auth_region: Option<String>,
+    pub api_region: Option<String>,
+    pub proxy_url: Option<String>,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+}
+
+// ============ 超额开关 ============
+
+/// 超额开关请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetOverageRequest {
+    pub enabled: bool,
+}
+
+// ============ Admin Keys 查看 ============
+
+/// API Key 摘要
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyEntry {
+    /// 脱敏展示
+    pub masked: String,
+    /// 原值（仅授权后台返回）
+    pub full: String,
+}
+
+/// Admin Keys 响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminKeysResponse {
+    pub api_key: KeyEntry,
+    pub admin_api_key: KeyEntry,
 }

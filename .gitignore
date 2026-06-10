@@ -2,6 +2,7 @@
 /CLAUDE.md
 /AGENTS.md
 /config.json
+/config/
 /credentials.json
 /.idea
 /test.json
@@ -11,3 +12,11 @@
 /credentials.*
 /kiro_balance_cache.json
 /kiro_stats.json
+/kiro_kv_cache_records.jsonl
+
+# macOS / 备份文件
+.DS_Store
+**/.DS_Store
+*.bak.*
+src.bak.*
+admin-ui/src.bak.*

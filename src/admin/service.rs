@@ -15,10 +15,10 @@ use crate::kiro::token_manager::MultiTokenManager;
 
 use super::error::AdminServiceError;
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, BalanceResponse, CredentialStatusItem,
-    CredentialsStatusResponse, KvCacheConfigResponse, LoadBalancingModeResponse,
-    RequestDetailItem, RequestDetailsResponse, SetKvCacheConfigRequest,
-    SetLoadBalancingModeRequest,
+    AddCredentialRequest, AddCredentialResponse, AdminKeysResponse, BalanceResponse,
+    CredentialStatusItem, CredentialsStatusResponse, KeyEntry, KvCacheConfigResponse,
+    LoadBalancingModeResponse, RequestDetailItem, RequestDetailsResponse, SetKvCacheConfigRequest,
+    SetLoadBalancingModeRequest, UpdateCredentialRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -132,6 +132,8 @@ impl AdminService {
                 refresh_failure_count: entry.refresh_failure_count,
                 disabled_reason: entry.disabled_reason,
                 endpoint: entry.endpoint.unwrap_or_else(|| default_endpoint.clone()),
+                auth_region: entry.auth_region,
+                api_region: entry.api_region,
             })
             .collect();
 
@@ -727,4 +729,86 @@ impl AdminService {
             AdminServiceError::InternalError(msg)
         }
     }
+
+    /// 部分更新凭据可编辑字段（PATCH /credentials/:id）
+    pub fn update_credential(
+        &self,
+        id: u64,
+        req: UpdateCredentialRequest,
+    ) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .update_credential_fields(
+                id,
+                req.email,
+                req.auth_region,
+                req.api_region,
+                req.proxy_url,
+                req.proxy_username,
+                req.proxy_password,
+            )
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("不存在") {
+                    AdminServiceError::NotFound { id }
+                } else {
+                    AdminServiceError::InternalError(msg)
+                }
+            })?;
+        // 清除该凭据的余额缓存（可能因 region/proxy 变化导致结果不同）
+        {
+            let mut cache = self.balance_cache.lock();
+            cache.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// 设置超额开关（POST /credentials/:id/overage）
+    ///
+    /// 当前为占位实现：仅校验凭据存在并清除余额缓存，方便前端按钮即时反馈。
+    /// 真正调用 AWS Q `setOverageConfiguration` 需要新增模型与签名逻辑。
+    pub fn set_credential_overage(
+        &self,
+        id: u64,
+        _enabled: bool,
+    ) -> Result<(), AdminServiceError> {
+        let snapshot = self.token_manager.snapshot();
+        if !snapshot.entries.iter().any(|e| e.id == id) {
+            return Err(AdminServiceError::NotFound { id });
+        }
+        {
+            let mut cache = self.balance_cache.lock();
+            cache.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// 获取脱敏与原值的密钥信息（GET /keys）
+    pub fn get_admin_keys(&self) -> AdminKeysResponse {
+        let cfg = self.token_manager.config();
+        let api_key_full = cfg.api_key.clone().unwrap_or_default();
+        let admin_key_full = cfg.admin_api_key.clone().unwrap_or_default();
+        AdminKeysResponse {
+            api_key: KeyEntry {
+                masked: mask_secret(&api_key_full),
+                full: api_key_full,
+            },
+            admin_api_key: KeyEntry {
+                masked: mask_secret(&admin_key_full),
+                full: admin_key_full,
+            },
+        }
+    }
+}
+
+fn mask_secret(s: &str) -> String {
+    let n = s.chars().count();
+    if n == 0 {
+        return String::new();
+    }
+    if n <= 10 {
+        return "*".repeat(n);
+    }
+    let head: String = s.chars().take(6).collect();
+    let tail: String = s.chars().rev().take(4).collect::<String>().chars().rev().collect();
+    format!("{}…{}", head, tail)
 }

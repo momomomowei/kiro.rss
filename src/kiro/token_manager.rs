@@ -710,6 +710,12 @@ pub struct CredentialEntrySnapshot {
     /// 端点名称（未显式配置时返回 None，由 Admin 层回退到默认值）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// 凭据级 Auth Region（用于 token 刷新）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_region: Option<String>,
+    /// 凭据级 API Region（用于 API 请求）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_region: Option<String>,
 }
 
 /// 凭据管理器状态快照
@@ -2115,6 +2121,8 @@ impl MultiTokenManager {
                         DisabledReason::InvalidConfig => "InvalidConfig",
                     }.to_string()),
                     endpoint: e.credentials.endpoint.clone(),
+                    auth_region: e.credentials.auth_region.clone(),
+                    api_region: e.credentials.api_region.clone(),
                 })
                 .collect(),
             current_id,
@@ -2142,6 +2150,52 @@ impl MultiTokenManager {
             }
         }
         // 持久化更改
+        self.persist_credentials()?;
+        Ok(())
+    }
+
+    /// 部分更新凭据可编辑字段（Admin API）
+    ///
+    /// 仅以下字段可被覆盖：
+    /// - email
+    /// - auth_region / api_region
+    /// - proxy_url / proxy_username / proxy_password
+    ///
+    /// 入参 `Some("")` 表示清空对应字段；`None` 表示保持现值。
+    pub fn update_credential_fields(
+        &self,
+        id: u64,
+        email: Option<String>,
+        auth_region: Option<String>,
+        api_region: Option<String>,
+        proxy_url: Option<String>,
+        proxy_username: Option<String>,
+        proxy_password: Option<String>,
+    ) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+
+            fn apply(target: &mut Option<String>, value: Option<String>) {
+                if let Some(v) = value {
+                    if v.is_empty() {
+                        *target = None;
+                    } else {
+                        *target = Some(v);
+                    }
+                }
+            }
+
+            apply(&mut entry.credentials.email, email);
+            apply(&mut entry.credentials.auth_region, auth_region);
+            apply(&mut entry.credentials.api_region, api_region);
+            apply(&mut entry.credentials.proxy_url, proxy_url);
+            apply(&mut entry.credentials.proxy_username, proxy_username);
+            apply(&mut entry.credentials.proxy_password, proxy_password);
+        }
         self.persist_credentials()?;
         Ok(())
     }

@@ -22,6 +22,8 @@ export interface CredentialStatusItem {
   lastUsedAt: string | null
   hasProxy: boolean
   proxyUrl?: string
+  authRegion?: string | null
+  apiRegion?: string | null
   refreshFailureCount: number
   disabledReason?: string
 }
@@ -35,6 +37,36 @@ export interface BalanceResponse {
   remaining: number
   usagePercentage: number
   nextResetAt: number | null
+  overageStatus?: string | null
+  overageLimit?: number | null
+  overageCharges?: number | null
+}
+
+// 更新凭据请求（PATCH /credentials/:id）
+export interface UpdateCredentialRequest {
+  email?: string | null
+  authRegion?: string | null
+  apiRegion?: string | null
+  proxyUrl?: string | null
+  proxyUsername?: string | null
+  proxyPassword?: string | null
+}
+
+// API Key 信息（GET /keys）
+export interface AdminKeysResponse {
+  apiKey: {
+    masked: string
+    full: string
+  }
+  adminApiKey: {
+    masked: string
+    full: string
+  }
+}
+
+// 超额开关请求
+export interface SetOverageRequest {
+  enabled: boolean
 }
 
 // 成功响应

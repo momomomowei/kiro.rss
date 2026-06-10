@@ -14,9 +14,12 @@ import {
   clearRequestDetails,
   getKvCacheConfig,
   setKvCacheConfig,
+  updateCredential,
+  setCredentialOverage,
+  getAdminKeys,
   type KvCacheConfig,
 } from '@/api/credentials'
-import type { AddCredentialRequest } from '@/types/api'
+import type { AddCredentialRequest, UpdateCredentialRequest } from '@/types/api'
 
 // 查询凭据列表
 export function useCredentials() {
@@ -160,5 +163,39 @@ export function useClearRequestDetails() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['requestDetails'] })
     },
+  })
+}
+
+// 更新凭据
+export function useUpdateCredential() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, req }: { id: number; req: UpdateCredentialRequest }) =>
+      updateCredential(id, req),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 设置超额开关
+export function useSetOverage() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      setCredentialOverage(id, enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      queryClient.invalidateQueries({ queryKey: ['credential-balance'] })
+    },
+  })
+}
+
+// 获取 Admin Keys
+export function useAdminKeys() {
+  return useQuery({
+    queryKey: ['adminKeys'],
+    queryFn: getAdminKeys,
+    staleTime: Infinity,
   })
 }

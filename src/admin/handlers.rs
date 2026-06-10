@@ -10,8 +10,8 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, RequestDetailsQuery, SetDisabledRequest,
-        SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetPriorityRequest,
-        SuccessResponse,
+        SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetOverageRequest,
+        SetPriorityRequest, SuccessResponse, UpdateCredentialRequest,
     },
 };
 
@@ -180,4 +180,43 @@ pub async fn set_kv_cache_config(
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
+}
+
+/// PATCH /api/admin/credentials/:id
+/// 部分更新凭据可编辑字段（email / region / proxy）
+pub async fn update_credential(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<UpdateCredentialRequest>,
+) -> impl IntoResponse {
+    match state.service.update_credential(id, payload) {
+        Ok(_) => Json(SuccessResponse::new(format!("凭据 #{} 已更新", id))).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/credentials/:id/overage
+/// 切换超额开关（占位实现）
+pub async fn set_credential_overage(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+    Json(payload): Json<SetOverageRequest>,
+) -> impl IntoResponse {
+    match state.service.set_credential_overage(id, payload.enabled) {
+        Ok(_) => {
+            let action = if payload.enabled { "开启" } else { "关闭" };
+            Json(SuccessResponse::new(format!(
+                "凭据 #{} 超额已请求{}（实际生效请到 Kiro / AWS 控制台确认）",
+                id, action
+            )))
+            .into_response()
+        }
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/keys
+/// 查看 API Key 与 Admin API Key（脱敏 + 原值，仅授权后台返回）
+pub async fn get_admin_keys(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_admin_keys()).into_response()
 }

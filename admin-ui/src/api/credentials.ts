@@ -9,6 +9,9 @@ import type {
   AddCredentialRequest,
   AddCredentialResponse,
   RequestDetailsResponse,
+  UpdateCredentialRequest,
+  AdminKeysResponse,
+  SetOverageRequest,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -134,5 +137,32 @@ export async function getRequestDetails(limit?: number): Promise<RequestDetailsR
 // 清空请求明细
 export async function clearRequestDetails(): Promise<SuccessResponse> {
   const { data } = await api.delete<SuccessResponse>('/details')
+  return data
+}
+
+// 更新凭据（PATCH）
+export async function updateCredential(
+  id: number,
+  req: UpdateCredentialRequest
+): Promise<SuccessResponse> {
+  const { data } = await api.patch<SuccessResponse>(`/credentials/${id}`, req)
+  return data
+}
+
+// 设置凭据超额开关
+export async function setCredentialOverage(
+  id: number,
+  enabled: boolean
+): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(
+    `/credentials/${id}/overage`,
+    { enabled } as SetOverageRequest
+  )
+  return data
+}
+
+// 获取 Admin Keys 信息
+export async function getAdminKeys(): Promise<AdminKeysResponse> {
+  const { data } = await api.get<AdminKeysResponse>('/keys')
   return data
 }

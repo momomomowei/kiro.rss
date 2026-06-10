@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2 } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2, Pencil, Zap, ZapOff } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { EditCredentialDialog } from '@/components/edit-credential-dialog'
 import type { CredentialStatusItem, BalanceResponse } from '@/types/api'
 import {
   useSetDisabled,
@@ -22,6 +23,7 @@ import {
   useResetFailure,
   useDeleteCredential,
   useForceRefreshToken,
+  useSetOverage,
 } from '@/hooks/use-credentials'
 
 interface CredentialCardProps {
@@ -60,12 +62,14 @@ export function CredentialCard({
   const [editingPriority, setEditingPriority] = useState(false)
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [showEditDialog, setShowEditDialog] = useState(false)
 
   const setDisabled = useSetDisabled()
   const setPriority = useSetPriority()
   const resetFailure = useResetFailure()
   const deleteCredential = useDeleteCredential()
   const forceRefresh = useForceRefreshToken()
+  const setOverage = useSetOverage()
 
   const handleToggleDisabled = () => {
     setDisabled.mutate(
@@ -143,7 +147,7 @@ export function CredentialCard({
 
   return (
     <>
-      <Card className={credential.isCurrent ? 'ring-2 ring-primary' : ''}>
+      <Card className={`glass-card shadow-apple-sm transition-all duration-200 ${credential.isCurrent ? 'ring-2 ring-primary' : ''}`}>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -373,6 +377,41 @@ export function CredentialCard({
             </Button>
             <Button
               size="sm"
+              variant="outline"
+              onClick={() => setShowEditDialog(true)}
+            >
+              <Pencil className="h-4 w-4 mr-1" />
+              编辑
+            </Button>
+            {balance && (() => {
+              const overageEnabled = balance.overageStatus === 'ENABLED'
+              return (
+                <Button
+                  size="sm"
+                  variant={overageEnabled ? 'outline' : 'default'}
+                  onClick={() => {
+                    setOverage.mutate(
+                      { id: credential.id, enabled: !overageEnabled },
+                      {
+                        onSuccess: (res) => toast.success(res.message || (overageEnabled ? '已关闭超额' : '已开启超额')),
+                        onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+                      },
+                    )
+                  }}
+                  disabled={setOverage.isPending}
+                  title={overageEnabled ? '关闭超额计费' : '开启超额计费'}
+                >
+                  {overageEnabled ? (
+                    <ZapOff className="h-4 w-4 mr-1" />
+                  ) : (
+                    <Zap className="h-4 w-4 mr-1" />
+                  )}
+                  {overageEnabled ? '关闭超额' : '开启超额'}
+                </Button>
+              )
+            })()}
+            <Button
+              size="sm"
               variant="destructive"
               onClick={() => setShowDeleteDialog(true)}
               disabled={!credential.disabled}
@@ -384,6 +423,13 @@ export function CredentialCard({
           </div>
         </CardContent>
       </Card>
+
+      {/* 编辑对话框 */}
+      <EditCredentialDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        credential={credential}
+      />
 
       {/* 删除确认对话框 */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
