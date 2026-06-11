@@ -310,116 +310,134 @@ export function CredentialCard({
             )}
           </div>
 
-          {/* 操作按钮 */}
-          <div className="flex flex-wrap gap-2 pt-2 border-t">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleReset}
-              disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
-            >
-              <RefreshCw className="h-4 w-4 mr-1" />
-              重置失败
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleForceRefresh}
-              disabled={forceRefresh.isPending || credential.disabled}
-              title={credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
-            >
-              <RefreshCw className={`h-4 w-4 mr-1 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
-              刷新 Token
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const newPriority = Math.max(0, credential.priority - 1)
-                setPriority.mutate(
-                  { id: credential.id, priority: newPriority },
-                  {
-                    onSuccess: (res) => toast.success(res.message),
-                    onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-                  }
+          {/* 操作按钮：主操作 / 优先级与重置 / 危险操作 三行分组 */}
+          <div className="space-y-2 pt-3 border-t border-border/60">
+            {/* 主操作 4 等分 */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => onViewBalance(credential.id)}
+                className="w-full"
+              >
+                <Wallet className="h-4 w-4 mr-1" />
+                查看余额
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setShowEditDialog(true)}
+                className="w-full"
+              >
+                <Pencil className="h-4 w-4 mr-1" />
+                编辑
+              </Button>
+              {(() => {
+                const overageEnabled = balance?.overageStatus === 'ENABLED'
+                return (
+                  <Button
+                    size="sm"
+                    variant={overageEnabled ? 'outline' : 'secondary'}
+                    onClick={() => {
+                      setOverage.mutate(
+                        { id: credential.id, enabled: !overageEnabled },
+                        {
+                          onSuccess: (res) => toast.success(res.message || (overageEnabled ? '已关闭超额' : '已开启超额')),
+                          onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+                        },
+                      )
+                    }}
+                    disabled={setOverage.isPending || !balance}
+                    title={!balance ? '请先查看余额获取超额状态' : overageEnabled ? '关闭超额计费' : '开启超额计费'}
+                    className="w-full"
+                  >
+                    {overageEnabled ? (
+                      <ZapOff className="h-4 w-4 mr-1" />
+                    ) : (
+                      <Zap className="h-4 w-4 mr-1" />
+                    )}
+                    {overageEnabled ? '关闭超额' : '开启超额'}
+                  </Button>
                 )
-              }}
-              disabled={setPriority.isPending || credential.priority === 0}
-            >
-              <ChevronUp className="h-4 w-4 mr-1" />
-              提高优先级
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const newPriority = credential.priority + 1
-                setPriority.mutate(
-                  { id: credential.id, priority: newPriority },
-                  {
-                    onSuccess: (res) => toast.success(res.message),
-                    onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-                  }
-                )
-              }}
-              disabled={setPriority.isPending}
-            >
-              <ChevronDown className="h-4 w-4 mr-1" />
-              降低优先级
-            </Button>
-            <Button
-              size="sm"
-              variant="default"
-              onClick={() => onViewBalance(credential.id)}
-            >
-              <Wallet className="h-4 w-4 mr-1" />
-              查看余额
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowEditDialog(true)}
-            >
-              <Pencil className="h-4 w-4 mr-1" />
-              编辑
-            </Button>
-            {balance && (() => {
-              const overageEnabled = balance.overageStatus === 'ENABLED'
-              return (
-                <Button
-                  size="sm"
-                  variant={overageEnabled ? 'outline' : 'default'}
-                  onClick={() => {
-                    setOverage.mutate(
-                      { id: credential.id, enabled: !overageEnabled },
-                      {
-                        onSuccess: (res) => toast.success(res.message || (overageEnabled ? '已关闭超额' : '已开启超额')),
-                        onError: (err) => toast.error('操作失败: ' + (err as Error).message),
-                      },
-                    )
-                  }}
-                  disabled={setOverage.isPending}
-                  title={overageEnabled ? '关闭超额计费' : '开启超额计费'}
-                >
-                  {overageEnabled ? (
-                    <ZapOff className="h-4 w-4 mr-1" />
-                  ) : (
-                    <Zap className="h-4 w-4 mr-1" />
-                  )}
-                  {overageEnabled ? '关闭超额' : '开启超额'}
-                </Button>
-              )
-            })()}
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => setShowDeleteDialog(true)}
-              disabled={!credential.disabled}
-              title={!credential.disabled ? '需要先禁用凭据才能删除' : undefined}
-            >
-              <Trash2 className="h-4 w-4 mr-1" />
-              删除
-            </Button>
+              })()}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleForceRefresh}
+                disabled={forceRefresh.isPending || credential.disabled}
+                title={credential.disabled ? '已禁用的凭据无法刷新 Token' : '强制刷新 Token'}
+                className="w-full"
+              >
+                <RefreshCw className={`h-4 w-4 mr-1 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
+                刷新 Token
+              </Button>
+            </div>
+
+            {/* 次要操作：优先级 + 重置失败 */}
+            <div className="grid grid-cols-3 gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const newPriority = Math.max(0, credential.priority - 1)
+                  setPriority.mutate(
+                    { id: credential.id, priority: newPriority },
+                    {
+                      onSuccess: (res) => toast.success(res.message),
+                      onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+                    }
+                  )
+                }}
+                disabled={setPriority.isPending || credential.priority === 0}
+                className="w-full"
+              >
+                <ChevronUp className="h-4 w-4 mr-1" />
+                提高优先级
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const newPriority = credential.priority + 1
+                  setPriority.mutate(
+                    { id: credential.id, priority: newPriority },
+                    {
+                      onSuccess: (res) => toast.success(res.message),
+                      onError: (err) => toast.error('操作失败: ' + (err as Error).message),
+                    }
+                  )
+                }}
+                disabled={setPriority.isPending}
+                className="w-full"
+              >
+                <ChevronDown className="h-4 w-4 mr-1" />
+                降低优先级
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleReset}
+                disabled={resetFailure.isPending || (credential.failureCount === 0 && credential.refreshFailureCount === 0)}
+                className="w-full"
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                重置失败
+              </Button>
+            </div>
+
+            {/* 危险操作：删除右对齐 */}
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={() => setShowDeleteDialog(true)}
+                disabled={!credential.disabled}
+                title={!credential.disabled ? '需要先禁用凭据才能删除' : undefined}
+              >
+                <Trash2 className="h-4 w-4 mr-1" />
+                删除凭据
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

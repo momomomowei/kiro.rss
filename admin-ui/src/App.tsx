@@ -3,7 +3,7 @@ import { storage } from '@/lib/storage'
 import { LoginPage } from '@/components/login-page'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { Activity, KeyRound, Server, LogOut, Moon, Sun } from 'lucide-react'
+import { Activity, Settings as SettingsIcon, Server, LogOut, Moon, Sun } from 'lucide-react'
 
 const Dashboard = lazy(() =>
   import('@/components/dashboard').then((m) => ({ default: m.Dashboard })),
@@ -11,21 +11,21 @@ const Dashboard = lazy(() =>
 const OverviewPage = lazy(() =>
   import('@/components/overview-page').then((m) => ({ default: m.OverviewPage })),
 )
-const KeysPage = lazy(() =>
-  import('@/components/keys-page').then((m) => ({ default: m.KeysPage })),
+const SettingsPage = lazy(() =>
+  import('@/components/settings-page').then((m) => ({ default: m.SettingsPage })),
 )
 
-type Tab = 'overview' | 'credentials' | 'keys'
+type Tab = 'overview' | 'credentials' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'overview', label: '概览', icon: <Activity className="h-3.5 w-3.5" /> },
   { key: 'credentials', label: '凭据管理', icon: <Server className="h-3.5 w-3.5" /> },
-  { key: 'keys', label: '密钥管理', icon: <KeyRound className="h-3.5 w-3.5" /> },
+  { key: 'settings', label: '设置', icon: <SettingsIcon className="h-3.5 w-3.5" /> },
 ]
 
 function readTabFromHash(): Tab {
   const h = window.location.hash.replace(/^#\/?/, '')
-  if (h === 'credentials' || h === 'keys' || h === 'overview') return h
+  if (h === 'credentials' || h === 'settings' || h === 'overview') return h
   return 'overview'
 }
 
@@ -142,7 +142,7 @@ function App() {
         >
           {tab === 'overview' && <OverviewPage />}
           {tab === 'credentials' && <Dashboard onLogout={handleLogout} />}
-          {tab === 'keys' && <KeysPage />}
+          {tab === 'settings' && <SettingsPage />}
         </Suspense>
       </main>
 
