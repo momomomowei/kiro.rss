@@ -16,6 +16,7 @@ use crate::kiro::model::requests::tool::{
 };
 
 use super::types::{ContentBlock, MessagesRequest};
+use crate::model::config::ModelEntry;
 
 /// 规范化 JSON Schema，修复 MCP 工具定义中常见的类型问题
 ///
@@ -108,6 +109,18 @@ pub fn map_model(model: &str) -> Option<String> {
     }
 }
 
+/// 模型映射（配置优先版本）
+///
+/// 先在配置的 `models` 表里按 `ModelEntry::matches` 查找，命中则返回其 `kiro_model_id`；
+/// 未命中回退到内置的 [`map_model`] 硬编码规则，保证向后兼容。
+pub fn map_model_with_config(model: &str, models: &[ModelEntry]) -> Option<String> {
+    let model_lower = model.to_lowercase();
+    if let Some(entry) = models.iter().find(|m| m.matches(&model_lower)) {
+        return Some(entry.kiro_model_id.clone());
+    }
+    map_model(model)
+}
+
 /// 根据模型名称返回对应的上下文窗口大小
 ///
 /// 复用 `map_model` 的映射逻辑，确保窗口大小判断与模型映射一致。
@@ -117,6 +130,18 @@ pub fn get_context_window_size(model: &str) -> i32 {
         Some(mapped) if mapped == "claude-sonnet-4.6" || mapped == "claude-opus-4.6" || mapped == "claude-opus-4.7" => 1_000_000,
         _ => 200_000,
     }
+}
+
+/// 上下文窗口大小（配置优先版本）
+///
+/// 先在配置的 `models` 表里查找命中条目并返回其 `context_window`；
+/// 未命中回退到内置的 [`get_context_window_size`] 规则。
+pub fn get_context_window_size_with_config(model: &str, models: &[ModelEntry]) -> i32 {
+    let model_lower = model.to_lowercase();
+    if let Some(entry) = models.iter().find(|m| m.matches(&model_lower)) {
+        return entry.context_window;
+    }
+    get_context_window_size(model)
 }
 
 /// 转换结果
@@ -218,10 +243,25 @@ fn create_placeholder_tool(name: &str) -> Tool {
     }
 }
 
-/// 将 Anthropic 请求转换为 Kiro 请求
+/// 将 Anthropic 请求转换为 Kiro 请求（使用内置模型映射规则）
+///
+/// 保留此签名以兼容现有调用与测试；内部委托给
+/// [`convert_request_with_models`]，传入空模型表即纯内置规则。
+#[allow(dead_code)]
 pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, ConversionError> {
-    // 1. 映射模型
-    let model_id = map_model(&req.model)
+    convert_request_with_models(req, &[])
+}
+
+/// 将 Anthropic 请求转换为 Kiro 请求（配置优先）
+///
+/// `models` 为 config.json 的模型映射表；命中则用配置的 `kiro_model_id`，
+/// 未命中回退内置规则。
+pub fn convert_request_with_models(
+    req: &MessagesRequest,
+    models: &[ModelEntry],
+) -> Result<ConversionResult, ConversionError> {
+    // 1. 映射模型（配置优先）
+    let model_id = map_model_with_config(&req.model, models)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
 
     // 2. 检查消息列表
@@ -902,6 +942,64 @@ fn merge_assistant_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 构造一个测试用的 sonnet5 模型条目
+    fn sonnet5_entry() -> ModelEntry {
+        ModelEntry {
+            id: "claude-sonnet-5".to_string(),
+            display_name: "Claude Sonnet 5".to_string(),
+            kiro_model_id: "claude-sonnet-5".to_string(),
+            context_window: 1_000_000,
+            max_tokens: 64000,
+            match_keywords: vec!["sonnet-5".to_string(), "sonnet5".to_string()],
+            created: 1780000000,
+        }
+    }
+
+    #[test]
+    fn test_map_model_with_config_hits_configured_entry() {
+        let models = vec![sonnet5_entry()];
+        // 命中配置：映射到配置的 kiro_model_id
+        assert_eq!(
+            map_model_with_config("claude-sonnet-5", &models),
+            Some("claude-sonnet-5".to_string())
+        );
+        // 关键词匹配
+        assert_eq!(
+            map_model_with_config("sonnet5-thinking", &models),
+            Some("claude-sonnet-5".to_string())
+        );
+    }
+
+    #[test]
+    fn test_map_model_with_config_falls_back_to_builtin() {
+        let models = vec![sonnet5_entry()];
+        // 未命中配置：回退内置规则（sonnet 4.6）
+        assert_eq!(
+            map_model_with_config("claude-sonnet-4-6", &models),
+            Some("claude-sonnet-4.6".to_string())
+        );
+        // 空配置：完全走内置规则
+        assert_eq!(
+            map_model_with_config("claude-opus-4-7", &[]),
+            Some("claude-opus-4.7".to_string())
+        );
+    }
+
+    #[test]
+    fn test_context_window_with_config() {
+        let models = vec![sonnet5_entry()];
+        // 命中配置：用配置的 context_window
+        assert_eq!(
+            get_context_window_size_with_config("claude-sonnet-5", &models),
+            1_000_000
+        );
+        // 未命中：回退内置（sonnet 4.5 是 200K）
+        assert_eq!(
+            get_context_window_size_with_config("claude-sonnet-4-5", &models),
+            200_000
+        );
+    }
 
     #[test]
     fn test_map_model_sonnet() {

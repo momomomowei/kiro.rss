@@ -556,6 +556,8 @@ pub struct StreamContext {
     strip_thinking_leading_newline: bool,
     /// 工具名称反向映射（短名 → 原始长名）
     pub tool_name_map: HashMap<String, String>,
+    /// 该模型的上下文窗口大小（由 handlers 按配置解析后设置；默认走内置规则）
+    pub context_window_size: i32,
 }
 
 impl StreamContext {
@@ -567,9 +569,11 @@ impl StreamContext {
         use_context_input_tokens: bool,
         tool_name_map: HashMap<String, String>,
     ) -> Self {
+        let model = model.into();
+        let context_window_size = get_context_window_size(&model);
         Self {
             state_manager: SseStateManager::new(),
-            model: model.into(),
+            model,
             message_id: format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
             input_tokens,
             context_input_tokens: None,
@@ -587,7 +591,13 @@ impl StreamContext {
             text_block_index: None,
             strip_thinking_leading_newline: false,
             tool_name_map,
+            context_window_size,
         }
+    }
+
+    /// 覆盖上下文窗口大小（由 handlers 按配置解析后设置）
+    pub fn set_context_window_size(&mut self, size: i32) {
+        self.context_window_size = size;
     }
 
     /// 生成 message_start 事件
@@ -658,7 +668,7 @@ impl StreamContext {
                 // 从上下文使用百分比计算实际的 input_tokens
                 // 公式: percentage * 200000 / 100 = percentage * 2000
                 let actual_input_tokens = (context_usage.context_usage_percentage
-                    * (get_context_window_size(&self.model) as f64)
+                    * (self.context_window_size as f64)
                     / 100.0) as i32;
                 if self.use_context_input_tokens {
                     self.context_input_tokens = Some(actual_input_tokens);
@@ -1223,6 +1233,11 @@ impl BufferedStreamContext {
     pub fn set_extra_usage(&mut self, cache_creation: i32, cache_read: i32, credits_used: f64) {
         self.inner
             .set_extra_usage(cache_creation, cache_read, credits_used);
+    }
+
+    /// 覆盖上下文窗口大小（由 handlers 按配置解析后设置）
+    pub fn set_context_window_size(&mut self, size: i32) {
+        self.inner.set_context_window_size(size);
     }
 
     /// 处理 Kiro 事件并缓冲结果

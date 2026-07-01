@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use std::collections::HashMap;
 
-use super::converter::{ConversionError, convert_request, get_context_window_size};
+use super::converter::{ConversionError, convert_request_with_models, get_context_window_size_with_config};
 use super::failure_prompt_log;
 use super::kv_cache::{
     KvCacheRecordInput, build_prompt_hashes, estimate_prompt_block_tokens,
@@ -361,9 +361,40 @@ fn map_provider_error(
 
 /// GET /v1/models
 ///
-/// 返回可用的模型列表
-pub async fn get_models() -> impl IntoResponse {
+/// 返回可用的模型列表。
+/// 若 config.json 配置了 `models` 段，则用配置生成（每个条目附带 chat + thinking 变体）；
+/// 否则返回内置的硬编码列表（向后兼容）。
+pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
+
+    // 配置驱动：非空则用配置生成列表
+    if !state.models.is_empty() {
+        let mut models = Vec::with_capacity(state.models.len() * 2);
+        for entry in state.models.iter() {
+            models.push(Model {
+                id: entry.id.clone(),
+                object: "model".to_string(),
+                created: entry.created,
+                owned_by: "anthropic".to_string(),
+                display_name: entry.display_name.clone(),
+                model_type: "chat".to_string(),
+                max_tokens: entry.max_tokens as i32,
+            });
+            models.push(Model {
+                id: format!("{}-thinking", entry.id),
+                object: "model".to_string(),
+                created: entry.created,
+                owned_by: "anthropic".to_string(),
+                display_name: format!("{} (Thinking)", entry.display_name),
+                model_type: "chat".to_string(),
+                max_tokens: entry.max_tokens as i32,
+            });
+        }
+        return Json(ModelsResponse {
+            object: "list".to_string(),
+            data: models,
+        });
+    }
 
     let models = vec![
         Model {
@@ -549,7 +580,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
     }
 
     // 转换请求
-    let conversion_result = match convert_request(&payload) {
+    let conversion_result = match convert_request_with_models(&payload, &state.models) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -620,6 +651,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
             "/v1/messages",
             special_settings,
             conversion_result.tool_name_map,
+            get_context_window_size_with_config(&payload.model, &state.models),
         )
         .await
     } else {
@@ -636,6 +668,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
             special_settings,
             conversion_result.tool_name_map,
             state.extract_thinking,
+            get_context_window_size_with_config(&payload.model, &state.models),
         )
         .await
     }
@@ -653,6 +686,7 @@ async fn handle_stream_request(
     endpoint: &'static str,
     special_settings: Vec<String>,
     tool_name_map: HashMap<String, String>,
+    context_window: i32,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api_stream(request_body).await {
@@ -666,6 +700,7 @@ async fn handle_stream_request(
 
     // 创建流处理上下文
     let mut ctx = StreamContext::new_with_thinking(model, input_tokens, thinking_enabled, false, tool_name_map);
+    ctx.set_context_window_size(context_window);
 
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
@@ -985,6 +1020,7 @@ async fn handle_non_stream_request(
     special_settings: Vec<String>,
     tool_name_map: HashMap<String, String>,
     extract_thinking: bool,
+    context_window: i32,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api(request_body).await {
@@ -1073,7 +1109,6 @@ async fn handle_non_stream_request(
                         }
                         Event::ContextUsage(context_usage) => {
                             // 从上下文使用百分比计算实际的 input_tokens
-                            let context_window = get_context_window_size(model);
                             let actual_input_tokens = (context_usage.context_usage_percentage
                                 * (context_window as f64)
                                 / 100.0)
@@ -1388,7 +1423,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
     }
 
     // 转换请求
-    let conversion_result = match convert_request(&payload) {
+    let conversion_result = match convert_request_with_models(&payload, &state.models) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -1459,6 +1494,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
             "/cc/v1/messages",
             special_settings,
             conversion_result.tool_name_map,
+            get_context_window_size_with_config(&payload.model, &state.models),
         )
         .await
     } else {
@@ -1475,6 +1511,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
             special_settings,
             conversion_result.tool_name_map,
             state.extract_thinking,
+            get_context_window_size_with_config(&payload.model, &state.models),
         )
         .await
     }
@@ -1495,6 +1532,7 @@ async fn handle_stream_request_buffered(
     endpoint: &'static str,
     special_settings: Vec<String>,
     tool_name_map: HashMap<String, String>,
+    context_window: i32,
 ) -> Response {
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api_stream(request_body).await {
@@ -1507,7 +1545,8 @@ async fn handle_stream_request_buffered(
     let response = api_response.response;
 
     // 创建缓冲流处理上下文
-    let ctx = BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map);
+    let mut ctx = BufferedStreamContext::new(model, estimated_input_tokens, thinking_enabled, tool_name_map);
+    ctx.set_context_window_size(context_window);
 
     // 创建缓冲 SSE 流
     let stream = create_buffered_sse_stream(

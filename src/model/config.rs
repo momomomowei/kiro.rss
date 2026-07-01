@@ -24,6 +24,65 @@ fn default_max_rate_limit_cooldown_ms() -> u64 {
     60000
 }
 
+// ============================================================================
+// 模型配置
+// ============================================================================
+
+fn default_model_context_window() -> i32 {
+    200_000
+}
+
+fn default_model_max_tokens() -> u32 {
+    64000
+}
+
+/// 模型条目：将对外模型名映射到 Kiro 上游模型 ID，并携带展示信息。
+///
+/// 配置在 `config.json` 的 `models` 数组中。配置了则优先使用，
+/// 未命中回退到 `converter::map_model` 的内置规则，保证向后兼容。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelEntry {
+    /// 对外模型 ID，如 "claude-sonnet-5"
+    pub id: String,
+
+    /// 展示名，如 "Claude Sonnet 5"
+    pub display_name: String,
+
+    /// 映射到的 Kiro 上游模型 ID，如 "claude-sonnet-5"
+    pub kiro_model_id: String,
+
+    /// 上下文窗口大小，默认 200000
+    #[serde(default = "default_model_context_window")]
+    pub context_window: i32,
+
+    /// 最大输出 token 数，默认 64000
+    #[serde(default = "default_model_max_tokens")]
+    pub max_tokens: u32,
+
+    /// 匹配关键词：对外模型名 `contains` 任一即命中此条目。
+    /// 为空则仅精确匹配 `id`。例如 ["sonnet-5", "sonnet5"]
+    #[serde(default)]
+    pub match_keywords: Vec<String>,
+
+    /// created 时间戳（用于 /v1/models 展示）
+    #[serde(default)]
+    pub created: i64,
+}
+
+impl ModelEntry {
+    /// 判断给定的对外模型名是否命中此条目
+    /// （精确匹配 id，或 match_keywords 中任一关键词被包含）
+    pub fn matches(&self, model_lower: &str) -> bool {
+        if model_lower == self.id.to_lowercase() {
+            return true;
+        }
+        self.match_keywords
+            .iter()
+            .any(|kw| model_lower.contains(&kw.to_lowercase()))
+    }
+}
+
 /// 账号-模型级上游保护配置
 ///
 /// 限制每个凭据在同一模型上的并发请求数，并在收到 429 后进行指数退避冷却。
@@ -188,6 +247,13 @@ pub struct Config {
     #[serde(default)]
     pub upstream_protection: UpstreamProtectionConfig,
 
+    /// 模型映射表（可选）。
+    ///
+    /// 配置了则优先使用（新增模型只改配置无需重编译），
+    /// 未命中回退到 `converter::map_model` 的内置硬编码规则。
+    #[serde(default)]
+    pub models: Vec<ModelEntry>,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -274,6 +340,7 @@ impl Default for Config {
             cache_read_efficiency: default_cache_read_efficiency(),
             kv_cache_ttl_secs: default_kv_cache_ttl_secs(),
             upstream_protection: UpstreamProtectionConfig::default(),
+            models: Vec::new(),
             config_path: None,
         }
     }
