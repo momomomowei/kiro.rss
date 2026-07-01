@@ -127,6 +127,40 @@ export async function setKvCacheConfig(config: Partial<KvCacheConfig>): Promise<
   return data
 }
 
+// 模型配置
+export interface ModelEntry {
+  id: string
+  displayName: string
+  kiroModelId: string
+  contextWindow: number
+  maxTokens: number
+  matchKeywords: string[]
+  created: number
+}
+
+export interface ModelsConfig {
+  models: ModelEntry[]
+}
+
+// 获取模型配置
+export async function getModelsConfig(): Promise<ModelsConfig> {
+  const { data } = await api.get<ModelsConfig>('/config/models')
+  return data
+}
+
+// 设置模型配置（保存即热更新生效）
+export async function setModelsConfig(models: ModelEntry[]): Promise<ModelsConfig> {
+  const { data } = await api.put<ModelsConfig>('/config/models', { models })
+  return data
+}
+
+// 重启服务（进程退出，由容器 restart 策略拉起）
+export async function restartService(): Promise<{ success: boolean; message: string }> {
+  const { data } = await api.post<{ success: boolean; message: string }>('/restart')
+  return data
+}
+
+
 // 获取请求明细
 export async function getRequestDetails(limit?: number): Promise<RequestDetailsResponse> {
   const params = limit ? { limit } : {}

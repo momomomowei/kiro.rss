@@ -9,9 +9,9 @@ use super::{
     handlers::{
         add_credential, clear_request_details, delete_credential, force_refresh_token,
         get_admin_keys, get_all_credentials, get_credential_balance, get_kv_cache_config,
-        get_load_balancing_mode, get_request_details, reset_failure_count,
-        set_credential_disabled, set_credential_overage, set_credential_priority,
-        set_kv_cache_config, set_load_balancing_mode, update_credential,
+        get_load_balancing_mode, get_models_config, get_request_details, reset_failure_count,
+        restart_service, set_credential_disabled, set_credential_overage, set_credential_priority,
+        set_kv_cache_config, set_load_balancing_mode, set_models_config, update_credential,
     },
     middleware::{AdminState, admin_auth_middleware},
 };
@@ -62,6 +62,11 @@ pub fn create_admin_router(state: AdminState) -> Router {
             "/config/kv-cache",
             get(get_kv_cache_config).put(set_kv_cache_config),
         )
+        .route(
+            "/config/models",
+            get(get_models_config).put(set_models_config),
+        )
+        .route("/restart", post(restart_service))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             admin_auth_middleware,

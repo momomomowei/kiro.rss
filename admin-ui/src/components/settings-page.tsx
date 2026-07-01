@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Copy,
   Eye,
@@ -11,12 +12,20 @@ import {
   RefreshCw,
   Sparkles,
   Timer,
+  Boxes,
+  Plus,
+  Trash2,
+  Power,
 } from 'lucide-react'
 import {
   useAdminKeys,
   useKvCacheConfig,
   useSetKvCacheConfig,
+  useModelsConfig,
+  useSetModelsConfig,
+  useRestartService,
 } from '@/hooks/use-credentials'
+import type { ModelEntry } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 
 // ============ 密钥行 ============
@@ -260,6 +269,223 @@ function KvCachePanel() {
   )
 }
 
+// ============ 模型配置 ============
+
+const emptyModel = (): ModelEntry => ({
+  id: '',
+  displayName: '',
+  kiroModelId: '',
+  contextWindow: 200000,
+  maxTokens: 64000,
+  matchKeywords: [],
+  created: Math.floor(Date.now() / 1000),
+})
+
+function ModelsPanel() {
+  const { data: modelsConfig, isLoading } = useModelsConfig()
+  const { mutate: saveModels, isPending: saving } = useSetModelsConfig()
+  const { mutate: restart, isPending: restarting } = useRestartService()
+  const [models, setModels] = useState<ModelEntry[]>([])
+  const [dirty, setDirty] = useState(false)
+
+  useEffect(() => {
+    if (modelsConfig) {
+      setModels(modelsConfig.models)
+      setDirty(false)
+    }
+  }, [modelsConfig])
+
+  const update = (i: number, patch: Partial<ModelEntry>) => {
+    setModels((prev) => prev.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
+    setDirty(true)
+  }
+
+  const addRow = () => {
+    setModels((prev) => [...prev, emptyModel()])
+    setDirty(true)
+  }
+
+  const removeRow = (i: number) => {
+    setModels((prev) => prev.filter((_, idx) => idx !== i))
+    setDirty(true)
+  }
+
+  const handleSave = () => {
+    // 基础前端校验
+    for (const m of models) {
+      if (!m.id.trim() || !m.kiroModelId.trim()) {
+        toast.error('模型 id 和 Kiro 模型 ID 不能为空')
+        return
+      }
+    }
+    saveModels(models, {
+      onSuccess: () => {
+        toast.success('模型配置已保存并热更新生效')
+        setDirty(false)
+      },
+      onError: (err) => toast.error('保存失败: ' + extractErrorMessage(err)),
+    })
+  }
+
+  const handleRestart = () => {
+    if (!confirm('确定要重启服务吗？服务将短暂中断，由容器自动拉起。')) return
+    restart(undefined, {
+      onSuccess: () => toast.success('已发送重启指令，服务稍后自动恢复'),
+      onError: (err) => toast.error('重启失败: ' + extractErrorMessage(err)),
+    })
+  }
+
+  return (
+    <Card className="glass-card shadow-apple-sm">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10">
+              <Boxes className="h-4.5 w-4.5 text-primary" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">模型配置</h3>
+              <p className="text-[12px] text-muted-foreground">
+                新增/编辑模型映射，保存即热更新生效（无需重启）
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-full"
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              <Power className="mr-1 h-3.5 w-3.5" />
+              重启服务
+            </Button>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <p className="text-sm text-muted-foreground">加载中...</p>
+        ) : (
+          <div className="space-y-3">
+            {models.map((m, i) => (
+              <div
+                key={i}
+                className="rounded-xl border border-border/60 p-3 space-y-2.5"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium text-muted-foreground">
+                    模型 #{i + 1}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                    onClick={() => removeRow(i)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  <LabeledInput
+                    label="对外模型 ID"
+                    value={m.id}
+                    placeholder="claude-sonnet-5"
+                    onChange={(v) => update(i, { id: v })}
+                  />
+                  <LabeledInput
+                    label="展示名"
+                    value={m.displayName}
+                    placeholder="Claude Sonnet 5"
+                    onChange={(v) => update(i, { displayName: v })}
+                  />
+                  <LabeledInput
+                    label="Kiro 上游模型 ID"
+                    value={m.kiroModelId}
+                    placeholder="claude-sonnet-5"
+                    onChange={(v) => update(i, { kiroModelId: v })}
+                  />
+                  <LabeledInput
+                    label="匹配关键词（逗号分隔）"
+                    value={m.matchKeywords.join(', ')}
+                    placeholder="sonnet-5, sonnet5"
+                    onChange={(v) =>
+                      update(i, {
+                        matchKeywords: v
+                          .split(',')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      })
+                    }
+                  />
+                  <LabeledInput
+                    label="上下文窗口"
+                    value={String(m.contextWindow)}
+                    placeholder="1000000"
+                    onChange={(v) => update(i, { contextWindow: Number(v) || 0 })}
+                  />
+                  <LabeledInput
+                    label="最大输出 Token"
+                    value={String(m.maxTokens)}
+                    placeholder="64000"
+                    onChange={(v) => update(i, { maxTokens: Number(v) || 0 })}
+                  />
+                </div>
+              </div>
+            ))}
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full rounded-xl border-dashed"
+              onClick={addRow}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" />
+              新增模型
+            </Button>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                size="sm"
+                className="h-8 rounded-full"
+                onClick={handleSave}
+                disabled={!dirty || saving}
+              >
+                {saving ? '保存中...' : '保存并生效'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// 带标签的输入框（模型配置用）
+function LabeledInput({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="text-[11px] text-muted-foreground">{label}</label>
+      <Input
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-8 text-sm"
+      />
+    </div>
+  )
+}
+
 // ============ 主页面 ============
 
 export function SettingsPage() {
@@ -354,6 +580,11 @@ export function SettingsPage() {
       {/* KV Cache */}
       <section>
         <KvCachePanel />
+      </section>
+
+      {/* 模型配置 */}
+      <section>
+        <ModelsPanel />
       </section>
     </div>
   )

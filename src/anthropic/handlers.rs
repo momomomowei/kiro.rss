@@ -362,15 +362,16 @@ fn map_provider_error(
 /// GET /v1/models
 ///
 /// 返回可用的模型列表。
-/// 若 config.json 配置了 `models` 段，则用配置生成（每个条目附带 chat + thinking 变体）；
-/// 否则返回内置的硬编码列表（向后兼容）。
-pub async fn get_models(State(state): State<AppState>) -> impl IntoResponse {
+/// 若全局模型注册表非空（config.json 的 `models` 段 / admin 后台热更新），
+/// 则用注册表生成（每个条目附带 chat + thinking 变体）；否则返回内置的硬编码列表。
+pub async fn get_models(State(_state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
 
-    // 配置驱动：非空则用配置生成列表
-    if !state.models.is_empty() {
-        let mut models = Vec::with_capacity(state.models.len() * 2);
-        for entry in state.models.iter() {
+    // 配置驱动：读全局注册表，非空则用它生成列表（支持 admin 后台热更新）
+    let registry_models = super::model_registry::get_models();
+    if !registry_models.is_empty() {
+        let mut models = Vec::with_capacity(registry_models.len() * 2);
+        for entry in registry_models.iter() {
             models.push(Model {
                 id: entry.id.clone(),
                 object: "model".to_string(),
@@ -580,7 +581,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
     }
 
     // 转换请求
-    let conversion_result = match convert_request_with_models(&payload, &state.models) {
+    let conversion_result = match convert_request_with_models(&payload, &super::model_registry::get_models()) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -651,7 +652,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
             "/v1/messages",
             special_settings,
             conversion_result.tool_name_map,
-            get_context_window_size_with_config(&payload.model, &state.models),
+            get_context_window_size_with_config(&payload.model, &super::model_registry::get_models()),
         )
         .await
     } else {
@@ -668,7 +669,7 @@ pub async fn post_messages(State(state): State<AppState>, body: BodyBytes) -> Re
             special_settings,
             conversion_result.tool_name_map,
             state.extract_thinking,
-            get_context_window_size_with_config(&payload.model, &state.models),
+            get_context_window_size_with_config(&payload.model, &super::model_registry::get_models()),
         )
         .await
     }
@@ -1423,7 +1424,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
     }
 
     // 转换请求
-    let conversion_result = match convert_request_with_models(&payload, &state.models) {
+    let conversion_result = match convert_request_with_models(&payload, &super::model_registry::get_models()) {
         Ok(result) => result,
         Err(e) => {
             let (error_type, message) = match &e {
@@ -1494,7 +1495,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
             "/cc/v1/messages",
             special_settings,
             conversion_result.tool_name_map,
-            get_context_window_size_with_config(&payload.model, &state.models),
+            get_context_window_size_with_config(&payload.model, &super::model_registry::get_models()),
         )
         .await
     } else {
@@ -1511,7 +1512,7 @@ pub async fn post_messages_cc(State(state): State<AppState>, body: BodyBytes) ->
             special_settings,
             conversion_result.tool_name_map,
             state.extract_thinking,
-            get_context_window_size_with_config(&payload.model, &state.models),
+            get_context_window_size_with_config(&payload.model, &super::model_registry::get_models()),
         )
         .await
     }

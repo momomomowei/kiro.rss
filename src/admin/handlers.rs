@@ -10,7 +10,7 @@ use super::{
     middleware::AdminState,
     types::{
         AddCredentialRequest, RequestDetailsQuery, SetDisabledRequest,
-        SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetOverageRequest,
+        SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest, SetOverageRequest,
         SetPriorityRequest, SuccessResponse, UpdateCredentialRequest,
     },
 };
@@ -180,6 +180,33 @@ pub async fn set_kv_cache_config(
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
+}
+
+/// GET /api/admin/config/models
+/// 获取模型配置
+pub async fn get_models_config(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_models())
+}
+
+/// PUT /api/admin/config/models
+/// 设置模型配置（保存即热更新生效）
+pub async fn set_models_config(
+    State(state): State<AdminState>,
+    Json(payload): Json<SetModelsRequest>,
+) -> impl IntoResponse {
+    match state.service.set_models(payload) {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/restart
+/// 重启服务（进程退出，由容器 restart 策略自动拉起）
+pub async fn restart_service(State(state): State<AdminState>) -> impl IntoResponse {
+    state.service.restart_service();
+    Json(SuccessResponse::new(
+        "服务将在约 0.5 秒后重启（由容器自动拉起）".to_string(),
+    ))
 }
 
 /// PATCH /api/admin/credentials/:id

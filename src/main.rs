@@ -159,6 +159,8 @@ async fn main() {
 
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     anthropic::kv_cache::set_kv_cache_config(config.cache_read_efficiency, config.kv_cache_ttl_secs);
+    // 初始化全局模型注册表（供 /v1/models 与映射查询使用，admin 后台可热更新）
+    anthropic::model_registry::set_models(config.models.clone());
     let anthropic_app = anthropic::create_router_with_provider(
         &api_key,
         Some(kiro_provider),

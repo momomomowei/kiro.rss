@@ -17,7 +17,11 @@ import {
   updateCredential,
   setCredentialOverage,
   getAdminKeys,
+  getModelsConfig,
+  setModelsConfig,
+  restartService,
   type KvCacheConfig,
+  type ModelEntry,
 } from '@/api/credentials'
 import type { AddCredentialRequest, UpdateCredentialRequest } from '@/types/api'
 
@@ -152,6 +156,32 @@ export function useSetKvCacheConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kvCacheConfig'] })
     },
+  })
+}
+
+// 获取模型配置
+export function useModelsConfig() {
+  return useQuery({
+    queryKey: ['modelsConfig'],
+    queryFn: getModelsConfig,
+  })
+}
+
+// 设置模型配置（保存即热更新生效）
+export function useSetModelsConfig() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (models: ModelEntry[]) => setModelsConfig(models),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['modelsConfig'] })
+    },
+  })
+}
+
+// 重启服务
+export function useRestartService() {
+  return useMutation({
+    mutationFn: restartService,
   })
 }
 

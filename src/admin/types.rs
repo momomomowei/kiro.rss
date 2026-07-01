@@ -383,3 +383,21 @@ pub struct AdminKeysResponse {
     pub api_key: KeyEntry,
     pub admin_api_key: KeyEntry,
 }
+
+// ============ 模型配置 ============
+
+/// 模型配置响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsConfigResponse {
+    /// 当前模型映射表
+    pub models: Vec<crate::model::config::ModelEntry>,
+}
+
+/// 设置模型配置请求
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetModelsRequest {
+    /// 新的模型映射表（整表覆盖）
+    pub models: Vec<crate::model::config::ModelEntry>,
+}

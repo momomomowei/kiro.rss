@@ -17,8 +17,8 @@ use super::error::AdminServiceError;
 use super::types::{
     AddCredentialRequest, AddCredentialResponse, AdminKeysResponse, BalanceResponse,
     CredentialStatusItem, CredentialsStatusResponse, KeyEntry, KvCacheConfigResponse,
-    LoadBalancingModeResponse, RequestDetailItem, RequestDetailsResponse, SetKvCacheConfigRequest,
-    SetLoadBalancingModeRequest, UpdateCredentialRequest,
+    LoadBalancingModeResponse, ModelsConfigResponse, RequestDetailItem, RequestDetailsResponse,
+    SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest, UpdateCredentialRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -394,6 +394,73 @@ impl AdminService {
             cache_read_efficiency: config.cache_read_efficiency,
             kv_cache_ttl_secs: config.kv_cache_ttl_secs,
         })
+    }
+
+    /// 获取模型配置（读全局注册表）
+    pub fn get_models(&self) -> ModelsConfigResponse {
+        ModelsConfigResponse {
+            models: crate::anthropic::model_registry::get_models(),
+        }
+    }
+
+    /// 设置模型配置：校验 → 持久化到 config.json → 热更新全局注册表（立即生效）
+    pub fn set_models(
+        &self,
+        req: SetModelsRequest,
+    ) -> Result<ModelsConfigResponse, AdminServiceError> {
+        use crate::model::config::Config;
+
+        // 基础校验：id / kiroModelId 不能为空，id 不能重复
+        let mut seen = std::collections::HashSet::new();
+        for m in &req.models {
+            if m.id.trim().is_empty() {
+                return Err(AdminServiceError::InvalidCredential(
+                    "模型 id 不能为空".to_string(),
+                ));
+            }
+            if m.kiro_model_id.trim().is_empty() {
+                return Err(AdminServiceError::InvalidCredential(format!(
+                    "模型 {} 的 kiroModelId 不能为空",
+                    m.id
+                )));
+            }
+            if !seen.insert(m.id.to_lowercase()) {
+                return Err(AdminServiceError::InvalidCredential(format!(
+                    "模型 id 重复: {}",
+                    m.id
+                )));
+            }
+        }
+
+        // 持久化到 config.json
+        let config_path = self
+            .token_manager
+            .config()
+            .config_path()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| AdminServiceError::InternalError("配置文件路径未知".to_string()))?;
+
+        let mut config = Config::load(&config_path)
+            .map_err(|e| AdminServiceError::InternalError(format!("加载配置失败: {}", e)))?;
+        config.models = req.models.clone();
+        config
+            .save()
+            .map_err(|e| AdminServiceError::InternalError(format!("保存配置失败: {}", e)))?;
+
+        // 热更新全局注册表，立即生效无需重启
+        crate::anthropic::model_registry::set_models(req.models.clone());
+
+        Ok(ModelsConfigResponse { models: req.models })
+    }
+
+    /// 重启服务（兜底）：返回后延迟退出进程，由 Docker restart:always 自动拉起
+    pub fn restart_service(&self) {
+        tokio::spawn(async {
+            // 给 HTTP 响应发出的时间
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tracing::warn!("收到 admin 重启请求，进程即将退出（由容器 restart 策略拉起）");
+            std::process::exit(0);
+        });
     }
 
     /// 强制刷新指定凭据的 Token
