@@ -362,40 +362,9 @@ fn map_provider_error(
 /// GET /v1/models
 ///
 /// 返回可用的模型列表。
-/// 若全局模型注册表非空（config.json 的 `models` 段 / admin 后台热更新），
-/// 则用注册表生成（每个条目附带 chat + thinking 变体）；否则返回内置的硬编码列表。
+/// 始终返回内置硬编码模型 + 全局注册表中配置的额外模型（config.json / admin 后台热更新）。
 pub async fn get_models(State(_state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received GET /v1/models request");
-
-    // 配置驱动：读全局注册表，非空则用它生成列表（支持 admin 后台热更新）
-    let registry_models = super::model_registry::get_models();
-    if !registry_models.is_empty() {
-        let mut models = Vec::with_capacity(registry_models.len() * 2);
-        for entry in registry_models.iter() {
-            models.push(Model {
-                id: entry.id.clone(),
-                object: "model".to_string(),
-                created: entry.created,
-                owned_by: "anthropic".to_string(),
-                display_name: entry.display_name.clone(),
-                model_type: "chat".to_string(),
-                max_tokens: entry.max_tokens as i32,
-            });
-            models.push(Model {
-                id: format!("{}-thinking", entry.id),
-                object: "model".to_string(),
-                created: entry.created,
-                owned_by: "anthropic".to_string(),
-                display_name: format!("{} (Thinking)", entry.display_name),
-                model_type: "chat".to_string(),
-                max_tokens: entry.max_tokens as i32,
-            });
-        }
-        return Json(ModelsResponse {
-            object: "list".to_string(),
-            data: models,
-        });
-    }
 
     let models = vec![
         Model {
@@ -508,9 +477,33 @@ pub async fn get_models(State(_state): State<AppState>) -> impl IntoResponse {
         },
     ];
 
+    // 追加全局注册表中配置的额外模型（admin 后台热更新的来源）
+    let registry_models = super::model_registry::get_models();
+    let mut all_models = models;
+    for entry in registry_models.iter() {
+        all_models.push(Model {
+            id: entry.id.clone(),
+            object: "model".to_string(),
+            created: entry.created,
+            owned_by: "anthropic".to_string(),
+            display_name: entry.display_name.clone(),
+            model_type: "chat".to_string(),
+            max_tokens: entry.max_tokens as i32,
+        });
+        all_models.push(Model {
+            id: format!("{}-thinking", entry.id),
+            object: "model".to_string(),
+            created: entry.created,
+            owned_by: "anthropic".to_string(),
+            display_name: format!("{} (Thinking)", entry.display_name),
+            model_type: "chat".to_string(),
+            max_tokens: entry.max_tokens as i32,
+        });
+    }
+
     Json(ModelsResponse {
         object: "list".to_string(),
-        data: models,
+        data: all_models,
     })
 }
 
