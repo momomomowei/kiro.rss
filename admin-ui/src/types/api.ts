@@ -119,7 +119,17 @@ export interface AddCredentialResponse {
 // 请求明细响应
 export interface RequestDetailsResponse {
   total: number
+  summary?: RequestDetailsSummary
   records: RequestDetailItem[]
+}
+
+export interface RequestDetailsSummary {
+  totalCalls: number
+  inputTokens: number
+  cachedTokens: number
+  outputTokens: number
+  creditsUsed: number
+  cacheHitCount: number
 }
 
 // 单次请求明细

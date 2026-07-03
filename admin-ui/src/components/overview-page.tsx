@@ -99,20 +99,23 @@ export function OverviewPage() {
 
   const reqStats = useMemo(() => {
     const list = detailsData?.records ?? []
-    const total = list.length
-    let inputTokens = 0
-    let outputTokens = 0
-    let cachedTokens = 0
-    let credits = 0
-    let cacheHitCount = 0
+    const summary = detailsData?.summary
+    const total = summary?.totalCalls ?? detailsData?.total ?? list.length
+    let inputTokens = summary?.inputTokens ?? 0
+    let outputTokens = summary?.outputTokens ?? 0
+    let cachedTokens = summary?.cachedTokens ?? 0
+    let credits = summary?.creditsUsed ?? 0
+    let cacheHitCount = summary?.cacheHitCount ?? 0
     const byModel = new Map<string, { calls: number; in: number; out: number }>()
 
     for (const r of list) {
-      inputTokens += r.inputTokens
-      outputTokens += r.outputTokens
-      cachedTokens += r.cachedTokens
-      credits += r.creditsUsed
-      if (r.cacheHit) cacheHitCount += 1
+      if (!summary) {
+        inputTokens += r.inputTokens
+        outputTokens += r.outputTokens
+        cachedTokens += r.cachedTokens
+        credits += r.creditsUsed
+        if (r.cacheHit) cacheHitCount += 1
+      }
 
       const m = byModel.get(r.model) ?? { calls: 0, in: 0, out: 0 }
       m.calls += 1

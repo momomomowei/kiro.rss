@@ -200,8 +200,28 @@ pub struct RequestDetailsQuery {
 pub struct RequestDetailsResponse {
     /// 解析成功的总记录数
     pub total: usize,
+    /// 聚合统计（基于全部解析成功的记录，不受 limit 影响）
+    pub summary: RequestDetailsSummary,
     /// 明细列表（按时间倒序）
     pub records: Vec<RequestDetailItem>,
+}
+
+/// 请求明细聚合统计
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestDetailsSummary {
+    /// 总调用次数
+    pub total_calls: usize,
+    /// 输入 tokens（不包含缓存读取和缓存创建）
+    pub input_tokens: i64,
+    /// 缓存读取 tokens
+    pub cached_tokens: i64,
+    /// 输出 tokens
+    pub output_tokens: i64,
+    /// 上游返回的 credits
+    pub credits_used: f64,
+    /// 命中缓存的请求数
+    pub cache_hit_count: usize,
 }
 
 /// 单次请求明细

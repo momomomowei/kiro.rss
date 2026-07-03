@@ -18,7 +18,8 @@ use super::types::{
     AddCredentialRequest, AddCredentialResponse, AdminKeysResponse, BalanceResponse,
     CredentialStatusItem, CredentialsStatusResponse, KeyEntry, KvCacheConfigResponse,
     LoadBalancingModeResponse, ModelsConfigResponse, RequestDetailItem, RequestDetailsResponse,
-    SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest, UpdateCredentialRequest,
+    RequestDetailsSummary, SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest,
+    UpdateCredentialRequest,
 };
 
 /// 余额缓存过期时间（秒），5 分钟
@@ -368,9 +369,7 @@ impl AdminService {
             .config()
             .config_path()
             .map(|p| p.to_path_buf())
-            .ok_or_else(|| {
-                AdminServiceError::InternalError("配置文件路径未知".to_string())
-            })?;
+            .ok_or_else(|| AdminServiceError::InternalError("配置文件路径未知".to_string()))?;
 
         let mut config = Config::load(&config_path)
             .map_err(|e| AdminServiceError::InternalError(format!("加载配置失败: {}", e)))?;
@@ -485,6 +484,7 @@ impl AdminService {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(RequestDetailsResponse {
                     total: 0,
+                    summary: RequestDetailsSummary::default(),
                     records: Vec::new(),
                 });
             }
@@ -512,8 +512,7 @@ impl AdminService {
                 continue;
             }
 
-            let stream =
-                serde_json::Deserializer::from_str(line).into_iter::<KvCacheRecordRow>();
+            let stream = serde_json::Deserializer::from_str(line).into_iter::<KvCacheRecordRow>();
             let mut parsed = false;
             let mut had_error = false;
             for item in stream {
@@ -534,15 +533,19 @@ impl AdminService {
             }
         }
 
-        let total = rows.len();
-        let records = rows
+        let mut mapped = rows
             .into_iter()
-            .rev()
-            .take(limit)
             .map(Self::map_request_detail)
-            .collect();
+            .collect::<Vec<_>>();
+        let total = mapped.len();
+        let summary = Self::summarize_request_details(&mapped);
+        let records = mapped.drain(..).rev().take(limit).collect();
 
-        Ok(RequestDetailsResponse { total, records })
+        Ok(RequestDetailsResponse {
+            total,
+            summary,
+            records,
+        })
     }
 
     /// 清空请求明细（截断 JSONL 文件）
@@ -599,6 +602,27 @@ impl AdminService {
             },
             special_settings: row.special_settings,
         }
+    }
+
+    fn summarize_request_details(records: &[RequestDetailItem]) -> RequestDetailsSummary {
+        let mut summary = RequestDetailsSummary {
+            total_calls: records.len(),
+            ..RequestDetailsSummary::default()
+        };
+
+        for record in records {
+            summary.input_tokens += i64::from(record.input_tokens.max(0));
+            summary.cached_tokens += i64::from(record.cached_tokens.max(0));
+            summary.output_tokens += i64::from(record.output_tokens.max(0));
+            if record.credits_used.is_finite() {
+                summary.credits_used += record.credits_used.max(0.0);
+            }
+            if record.cache_hit {
+                summary.cache_hit_count += 1;
+            }
+        }
+
+        summary
     }
 
     fn calculate_request_cost(
@@ -790,7 +814,8 @@ impl AdminService {
         let msg = e.to_string();
         if msg.contains("不存在") {
             AdminServiceError::NotFound { id }
-        } else if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据") {
+        } else if msg.contains("只能删除已禁用的凭据") || msg.contains("请先禁用凭据")
+        {
             AdminServiceError::InvalidCredential(msg)
         } else {
             AdminServiceError::InternalError(msg)
@@ -833,11 +858,7 @@ impl AdminService {
     ///
     /// 当前为占位实现：仅校验凭据存在并清除余额缓存，方便前端按钮即时反馈。
     /// 真正调用 AWS Q `setOverageConfiguration` 需要新增模型与签名逻辑。
-    pub fn set_credential_overage(
-        &self,
-        id: u64,
-        _enabled: bool,
-    ) -> Result<(), AdminServiceError> {
+    pub fn set_credential_overage(&self, id: u64, _enabled: bool) -> Result<(), AdminServiceError> {
         let snapshot = self.token_manager.snapshot();
         if !snapshot.entries.iter().any(|e| e.id == id) {
             return Err(AdminServiceError::NotFound { id });
@@ -876,6 +897,13 @@ fn mask_secret(s: &str) -> String {
         return "*".repeat(n);
     }
     let head: String = s.chars().take(6).collect();
-    let tail: String = s.chars().rev().take(4).collect::<String>().chars().rev().collect();
+    let tail: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     format!("{}…{}", head, tail)
 }
