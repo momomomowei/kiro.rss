@@ -79,24 +79,35 @@ Complete all chunked operations without commentary.";
 /// 模型映射：将 Anthropic 模型名映射到 Kiro 模型 ID
 ///
 /// 按照用户要求：
+/// - sonnet 5 → claude-sonnet-5
 /// - sonnet 4.6/4-6 → claude-sonnet-4.6
+/// - sonnet 4 → claude-sonnet-4
 /// - 其他 sonnet → claude-sonnet-4.5
+/// - opus 4.8/4-8 → claude-opus-4.8
 /// - opus 4.7/4-7 → claude-opus-4.7
+/// - opus 4.6/4-6 → claude-opus-4.6
 /// - opus 4.5/4-5 → claude-opus-4.5
-/// - 其他 opus → claude-opus-4.6
 /// - 所有 haiku → claude-haiku-4.5
 pub fn map_model(model: &str) -> Option<String> {
     let model_lower = model.to_lowercase();
 
     if model_lower.contains("sonnet") {
-        if model_lower.contains("4-6") || model_lower.contains("4.6") {
+        if model_lower.contains("sonnet-5") || model_lower.contains("sonnet5") {
+            Some("claude-sonnet-5".to_string())
+        } else if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
+        } else if model_lower.contains("4") {
+            Some("claude-sonnet-4".to_string())
         } else {
             Some("claude-sonnet-4.5".to_string())
         }
     } else if model_lower.contains("opus") {
-        if model_lower.contains("4-7") || model_lower.contains("4.7") {
+        if model_lower.contains("4-8") || model_lower.contains("4.8") {
+            Some("claude-opus-4.8".to_string())
+        } else if model_lower.contains("4-7") || model_lower.contains("4.7") {
             Some("claude-opus-4.7".to_string())
+        } else if model_lower.contains("4-6") || model_lower.contains("4.6") {
+            Some("claude-opus-4.6".to_string())
         } else if model_lower.contains("4-5") || model_lower.contains("4.5") {
             Some("claude-opus-4.5".to_string())
         } else {
@@ -104,6 +115,18 @@ pub fn map_model(model: &str) -> Option<String> {
         }
     } else if model_lower.contains("haiku") {
         Some("claude-haiku-4.5".to_string())
+    } else if model_lower.contains("deepseek") {
+        Some("deepseek-3.2".to_string())
+    } else if model_lower.contains("minimax") {
+        if model_lower.contains("m2.1") || model_lower.contains("m2-1") {
+            Some("minimax-m2.1".to_string())
+        } else {
+            Some("minimax-m2.5".to_string())
+        }
+    } else if model_lower.contains("glm") {
+        Some("glm-5".to_string())
+    } else if model_lower.contains("qwen") {
+        Some("qwen3-coder-next".to_string())
     } else {
         None
     }
@@ -115,6 +138,9 @@ pub fn map_model(model: &str) -> Option<String> {
 /// 未命中回退到内置的 [`map_model`] 硬编码规则，保证向后兼容。
 pub fn map_model_with_config(model: &str, models: &[ModelEntry]) -> Option<String> {
     let model_lower = model.to_lowercase();
+    if let Some(model) = super::model_cache::map_model(model) {
+        return Some(model);
+    }
     if let Some(entry) = models.iter().find(|m| m.matches(&model_lower)) {
         return Some(entry.kiro_model_id.clone());
     }
@@ -127,7 +153,15 @@ pub fn map_model_with_config(model: &str, models: &[ModelEntry]) -> Option<Strin
 /// Kiro 于 2026-03-24 将 Opus 4.6 和 Sonnet 4.6 升级至 1M 上下文。
 pub fn get_context_window_size(model: &str) -> i32 {
     match map_model(model) {
-        Some(mapped) if mapped == "claude-sonnet-4.6" || mapped == "claude-opus-4.6" || mapped == "claude-opus-4.7" => 1_000_000,
+        Some(mapped) if mapped == "claude-sonnet-5"
+            || mapped == "claude-sonnet-4.6"
+            || mapped == "claude-opus-4.8"
+            || mapped == "claude-opus-4.7"
+            || mapped == "claude-opus-4.6" => 1_000_000,
+        Some(mapped) if mapped == "deepseek-3.2" => 164_000,
+        Some(mapped) if mapped == "minimax-m2.5" || mapped == "minimax-m2.1" => 196_000,
+        Some(mapped) if mapped == "glm-5" => 200_000,
+        Some(mapped) if mapped == "qwen3-coder-next" => 256_000,
         _ => 200_000,
     }
 }
@@ -137,6 +171,9 @@ pub fn get_context_window_size(model: &str) -> i32 {
 /// 先在配置的 `models` 表里查找命中条目并返回其 `context_window`；
 /// 未命中回退到内置的 [`get_context_window_size`] 规则。
 pub fn get_context_window_size_with_config(model: &str, models: &[ModelEntry]) -> i32 {
+    if let Some(size) = super::model_cache::context_window_for(model) {
+        return size;
+    }
     let model_lower = model.to_lowercase();
     if let Some(entry) = models.iter().find(|m| m.matches(&model_lower)) {
         return entry.context_window;

@@ -28,7 +28,7 @@ const KV_RECORDS_FILE: &str = "kiro_kv_cache_records.jsonl";
 /// 小于该阈值的请求不参与 prompt cache（既不读也不写），避免小请求造成误判/噪声。
 const MIN_CACHEABLE_INPUT_TOKENS: i32 = 1000;
 /// KV cache 状态在内存中的 TTL（秒）
-const KV_STATE_TTL_SECS: i64 = 3600;
+const KV_STATE_TTL_SECS: i64 = 1800;
 /// 为避免每次请求都扫描全部 namespaces，做一次全量 prune 的最小间隔（秒）
 const KV_STATE_PRUNE_INTERVAL_SECS: i64 = 30;
 // v5: KV cache 记录与状态中的 input_tokens 口径采用“本地可见 prompt 的确定性估算 tokens”。
@@ -61,8 +61,6 @@ pub struct KvCacheRecordInput {
 /// 模拟 KV cache 的命中结果（用于写入记录文件，以及回填到 API usage 字段）
 #[derive(Debug, Clone)]
 pub struct KvCacheSimResult {
-    pub cache_key: String,
-    pub cache_hit: bool,
     pub cache_creation_input_tokens: i32,
     pub cache_read_input_tokens: i32,
 }
@@ -88,6 +86,7 @@ struct KvInMemoryState {
 static KV_STATE: OnceLock<Mutex<KvInMemoryState>> = OnceLock::new();
 static KV_RECORDS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KV_CONFIG: OnceLock<Mutex<(f64, i64)>> = OnceLock::new();
+static KV_RECORDS_DIR: OnceLock<Mutex<PathBuf>> = OnceLock::new();
 
 /// 设置 KV cache 的运行时配置（可多次调用，后续调用会更新值）
 pub fn set_kv_cache_config(cache_read_efficiency: f64, kv_cache_ttl_secs: i64) {
@@ -99,11 +98,23 @@ pub fn set_kv_cache_config(cache_read_efficiency: f64, kv_cache_ttl_secs: i64) {
 }
 
 pub fn get_cache_read_efficiency() -> f64 {
-    KV_CONFIG.get().map(|l| l.lock().0).unwrap_or(0.87)
+    KV_CONFIG.get().map(|l| l.lock().0).unwrap_or(0.90)
 }
 
 pub fn get_kv_cache_ttl_secs() -> i64 {
-    KV_CONFIG.get().map(|l| l.lock().1).unwrap_or(3600)
+    KV_CONFIG
+        .get()
+        .map(|l| l.lock().1)
+        .unwrap_or(KV_STATE_TTL_SECS)
+}
+
+pub fn set_records_dir(dir: PathBuf) {
+    match KV_RECORDS_DIR.get() {
+        Some(lock) => *lock.lock() = dir,
+        None => {
+            let _ = KV_RECORDS_DIR.set(Mutex::new(dir));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -125,7 +136,9 @@ struct KvCacheRecord {
 }
 
 fn resolve_cache_dir(dir_hint: Option<PathBuf>) -> PathBuf {
-    dir_hint.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    dir_hint
+        .or_else(|| KV_RECORDS_DIR.get().map(|lock| lock.lock().clone()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn records_file_path(dir_hint: Option<PathBuf>) -> PathBuf {
@@ -157,10 +170,6 @@ fn append_record(path: &PathBuf, record: &KvCacheRecord) -> anyhow::Result<()> {
     line.push(b'\n');
     file.write_all(&line)?;
     Ok(())
-}
-
-fn is_prefix(prefix: &[String], full: &[String]) -> bool {
-    prefix.len() <= full.len() && prefix.iter().zip(full.iter()).all(|(a, b)| a == b)
 }
 
 fn upsert_prompt_entry(
@@ -371,8 +380,6 @@ fn record_impl(
     append_record(&records_path, &record)?;
 
     Ok(KvCacheSimResult {
-        cache_key,
-        cache_hit,
         cache_creation_input_tokens,
         cache_read_input_tokens,
     })
@@ -561,8 +568,6 @@ pub fn record_simulated_kv_cache(
     input: KvCacheRecordInput,
 ) -> KvCacheSimResult {
     let fallback = KvCacheSimResult {
-        cache_key: cache_key_for(&input.prompt_hashes),
-        cache_hit: false,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
     };

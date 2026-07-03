@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
+import { useQuery } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -10,8 +11,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useUpdateCredential } from '@/hooks/use-credentials'
+import { getProxyPool } from '@/api/credentials'
 import type { CredentialStatusItem } from '@/types/api'
 import { extractErrorMessage } from '@/lib/utils'
+import { maskProxyUrl } from '@/lib/proxy-store'
 
 interface EditCredentialDialogProps {
   open: boolean
@@ -28,17 +31,18 @@ export function EditCredentialDialog({
   const [authRegion, setAuthRegion] = useState('')
   const [apiRegion, setApiRegion] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
-  const [proxyUsername, setProxyUsername] = useState('')
-  const [proxyPassword, setProxyPassword] = useState('')
+  const { data: proxyPool } = useQuery({
+    queryKey: ['proxy-pool'],
+    queryFn: getProxyPool,
+    enabled: open,
+  })
 
   useEffect(() => {
     if (open) {
       setEmail(credential.email ?? '')
       setAuthRegion(credential.authRegion ?? '')
       setApiRegion(credential.apiRegion ?? '')
-      setProxyUrl(credential.proxyUrl ?? '')
-      setProxyUsername('')
-      setProxyPassword('')
+      setProxyUrl(credential.proxyUrl || 'direct')
     }
   }, [open, credential])
 
@@ -54,9 +58,7 @@ export function EditCredentialDialog({
           email: trim(email) || null,
           authRegion: trim(authRegion) || null,
           apiRegion: trim(apiRegion) || null,
-          proxyUrl: trim(proxyUrl) || null,
-          proxyUsername: trim(proxyUsername) || null,
-          proxyPassword: trim(proxyPassword) || null,
+          proxyUrl: trim(proxyUrl) || 'direct',
         },
       },
       {
@@ -75,10 +77,19 @@ export function EditCredentialDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>编辑凭据 #{credential.id}</DialogTitle>
+          <DialogTitle>
+            <span className="block truncate">
+              {credential.email || `凭据 #${credential.id}`}
+            </span>
+            {credential.email && (
+              <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                凭据 #{credential.id}
+              </span>
+            )}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
-          <Field label="备注邮箱">
+          <Field label="邮箱">
             <Input
               type="email"
               value={email}
@@ -110,39 +121,25 @@ export function EditCredentialDialog({
           <div className="space-y-3 rounded-xl border border-border/60 p-3 bg-muted/30">
             <div className="text-[13px] font-medium">代理设置</div>
             <Field
-              label="代理 URL"
-              hint="留空表示直连；支持 http(s):// 和 socks5://"
+              label="账号代理"
+              hint="从代理管理中选择"
             >
-              <Input
+              <select
                 value={proxyUrl}
                 onChange={(e) => setProxyUrl(e.target.value)}
-                placeholder="socks5://127.0.0.1:1080"
                 disabled={isPending}
-              />
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="direct">直连</option>
+                {proxyPool?.proxies.map(proxy => (
+                  <option key={proxy.id} value={proxy.url}>
+                    {proxy.label ? `${proxy.label} - ` : ''}{maskProxyUrl(proxy.url)}
+                  </option>
+                ))}
+              </select>
             </Field>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="代理用户名">
-                <Input
-                  value={proxyUsername}
-                  onChange={(e) => setProxyUsername(e.target.value)}
-                  placeholder="可选"
-                  disabled={isPending}
-                  autoComplete="off"
-                />
-              </Field>
-              <Field label="代理密码">
-                <Input
-                  type="password"
-                  value={proxyPassword}
-                  onChange={(e) => setProxyPassword(e.target.value)}
-                  placeholder="可选"
-                  disabled={isPending}
-                  autoComplete="new-password"
-                />
-              </Field>
-            </div>
             <p className="text-[11px] text-muted-foreground">
-              留空用户名/密码表示沿用现有值，提交时会被忽略；如需清空请直接清空 URL。
+              代理地址在“代理管理”页面添加；选择“直连”表示不使用代理。
             </p>
           </div>
 

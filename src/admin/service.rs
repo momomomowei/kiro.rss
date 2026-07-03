@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -12,13 +13,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::token_manager::MultiTokenManager;
+use crate::http_client::{build_client, ProxyConfig};
 
 use super::error::AdminServiceError;
 use super::types::{
-    AddCredentialRequest, AddCredentialResponse, AdminKeysResponse, BalanceResponse,
-    CredentialStatusItem, CredentialsStatusResponse, KeyEntry, KvCacheConfigResponse,
+    AddCredentialRequest, AddCredentialResponse, AddProxyRequest, AdminKeysResponse,
+    AvailableModelItem, AvailableModelsResponse, BalanceResponse, CredentialStatusItem,
+    CredentialsStatusResponse, KeyEntry, KvCacheConfigResponse,
     LoadBalancingModeResponse, ModelsConfigResponse, RequestDetailItem, RequestDetailsResponse,
-    RequestDetailsSummary, SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest,
+    ModelCacheResponse, ProxyCheckAllResponse, ProxyCheckResponse, ProxyHealth,
+    RefreshModelCacheResponse, RequestDetailsSummary, ProxyPoolEntry, ProxyPoolResponse,
+    SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest,
     UpdateCredentialRequest,
 };
 
@@ -30,6 +35,7 @@ const REQUEST_DETAILS_DEFAULT_LIMIT: usize = 100;
 const REQUEST_DETAILS_MAX_LIMIT: usize = 1000;
 /// 模拟 KV 缓存记录文件名
 const KV_CACHE_RECORDS_FILE: &str = "kiro_kv_cache_records.jsonl";
+const PROXY_POOL_FILE: &str = "kiro_proxy_pool.json";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,6 +85,7 @@ pub struct AdminService {
     /// 已注册的端点名称集合（用于 add_credential 校验）
     known_endpoints: HashSet<String>,
     request_details_path: PathBuf,
+    proxy_pool_path: PathBuf,
 }
 
 impl AdminService {
@@ -93,6 +100,8 @@ impl AdminService {
             .cache_dir()
             .map(|d| d.join("kiro_balance_cache.json"));
         let request_details_path = cache_dir.join(KV_CACHE_RECORDS_FILE);
+        let proxy_pool_path = cache_dir.join(PROXY_POOL_FILE);
+        Self::ensure_proxy_pool_file(&proxy_pool_path);
 
         let balance_cache = Self::load_balance_cache_from(&cache_path);
 
@@ -102,6 +111,7 @@ impl AdminService {
             cache_path,
             known_endpoints: known_endpoints.into_iter().collect(),
             request_details_path,
+            proxy_pool_path,
         }
     }
 
@@ -109,32 +119,47 @@ impl AdminService {
     pub fn get_all_credentials(&self) -> CredentialsStatusResponse {
         let snapshot = self.token_manager.snapshot();
         let default_endpoint = self.token_manager.config().default_endpoint.clone();
+        let balance_cache = self.balance_cache.lock();
+        let now_ts = Utc::now().timestamp() as f64;
 
         let mut credentials: Vec<CredentialStatusItem> = snapshot
             .entries
             .into_iter()
-            .map(|entry| CredentialStatusItem {
-                id: entry.id,
-                priority: entry.priority,
-                disabled: entry.disabled,
-                failure_count: entry.failure_count,
-                is_current: entry.id == snapshot.current_id,
-                expires_at: entry.expires_at,
-                auth_method: entry.auth_method,
-                has_profile_arn: entry.has_profile_arn,
-                refresh_token_hash: entry.refresh_token_hash,
-                api_key_hash: entry.api_key_hash,
-                masked_api_key: entry.masked_api_key,
-                email: entry.email,
-                success_count: entry.success_count,
-                last_used_at: entry.last_used_at.clone(),
-                has_proxy: entry.has_proxy,
-                proxy_url: entry.proxy_url,
-                refresh_failure_count: entry.refresh_failure_count,
-                disabled_reason: entry.disabled_reason,
-                endpoint: entry.endpoint.unwrap_or_else(|| default_endpoint.clone()),
-                auth_region: entry.auth_region,
-                api_region: entry.api_region,
+            .map(|entry| {
+                let cached_balance = balance_cache.get(&entry.id);
+                CredentialStatusItem {
+                    id: entry.id,
+                    priority: entry.priority,
+                    disabled: entry.disabled,
+                    failure_count: entry.failure_count,
+                    is_current: entry.id == snapshot.current_id,
+                    expires_at: entry.expires_at,
+                    auth_method: entry.auth_method,
+                    has_profile_arn: entry.has_profile_arn,
+                    refresh_token_hash: entry.refresh_token_hash,
+                    api_key_hash: entry.api_key_hash,
+                    masked_api_key: entry.masked_api_key,
+                    email: entry.email,
+                    success_count: entry.success_count,
+                    last_used_at: entry.last_used_at.clone(),
+                    has_proxy: entry.has_proxy,
+                    proxy_url: entry.proxy_url,
+                    refresh_failure_count: entry.refresh_failure_count,
+                    disabled_reason: entry.disabled_reason,
+                    endpoint: entry.endpoint.unwrap_or_else(|| default_endpoint.clone()),
+                    auth_region: entry.auth_region,
+                    api_region: entry.api_region,
+                    balance: cached_balance
+                        .filter(|cached| {
+                            (now_ts - cached.cached_at) < BALANCE_CACHE_TTL_SECS as f64
+                        })
+                        .map(|cached| cached.data.clone()),
+                    balance_updated_at: cached_balance
+                        .filter(|cached| {
+                            (now_ts - cached.cached_at) < BALANCE_CACHE_TTL_SECS as f64
+                        })
+                        .map(|cached| cached.cached_at),
+                }
             })
             .collect();
 
@@ -181,9 +206,13 @@ impl AdminService {
     }
 
     /// 获取凭据余额（带缓存）
-    pub async fn get_balance(&self, id: u64) -> Result<BalanceResponse, AdminServiceError> {
+    pub async fn get_balance(
+        &self,
+        id: u64,
+        force: bool,
+    ) -> Result<BalanceResponse, AdminServiceError> {
         // 先查缓存
-        {
+        if !force {
             let cache = self.balance_cache.lock();
             if let Some(cached) = cache.get(&id) {
                 let now = Utc::now().timestamp() as f64;
@@ -223,12 +252,18 @@ impl AdminService {
 
         let current_usage = usage.current_usage();
         let usage_limit = usage.usage_limit();
-        let remaining = (usage_limit - current_usage).max(0.0);
+        let remaining = usage_limit - current_usage;
         let usage_percentage = if usage_limit > 0.0 {
-            (current_usage / usage_limit * 100.0).min(100.0)
+            current_usage / usage_limit * 100.0
         } else {
             0.0
         };
+
+        if remaining <= 0.0 || usage_percentage >= 100.0 {
+            if let Err(e) = self.token_manager.disable_quota_exceeded(id) {
+                tracing::warn!("凭据 #{} 已超额，但禁用失败: {}", id, e);
+            }
+        }
 
         Ok(BalanceResponse {
             id,
@@ -265,7 +300,7 @@ impl AdminService {
             id: None,
             access_token: None,
             refresh_token: req.refresh_token,
-            profile_arn: None,
+            profile_arn: req.profile_arn,
             expires_at: None,
             auth_method: Some(req.auth_method),
             client_id: req.client_id,
@@ -400,6 +435,118 @@ impl AdminService {
         ModelsConfigResponse {
             models: crate::anthropic::model_registry::get_models(),
         }
+    }
+
+    /// 当前运行时模型缓存快照
+    pub fn get_model_cache(&self) -> ModelCacheResponse {
+        let snapshot = crate::anthropic::model_cache::snapshot();
+        ModelCacheResponse {
+            cached_at: snapshot.cached_at,
+            models: snapshot.models,
+            accounts: snapshot.accounts,
+        }
+    }
+
+    /// 获取指定凭据当前可用的模型列表（实时查询上游，并同步缓存）
+    pub async fn get_available_models(
+        &self,
+        id: u64,
+    ) -> Result<AvailableModelsResponse, AdminServiceError> {
+        let resp = self
+            .token_manager
+            .get_available_models_for(id)
+            .await
+            .map_err(|e| self.classify_balance_error(e, id))?;
+        crate::anthropic::model_cache::set_account_models(id, resp.models.clone());
+
+        let models = resp
+            .models
+            .into_iter()
+            .map(|m| AvailableModelItem {
+                model_id: m.model_id,
+                model_name: m.model_name,
+                description: m.description,
+                max_input_tokens: m.token_limits.and_then(|t| t.max_input_tokens),
+            })
+            .collect();
+
+        Ok(AvailableModelsResponse { id, models })
+    }
+
+    /// 刷新指定凭据的模型缓存
+    pub async fn refresh_model_cache_for(
+        &self,
+        id: u64,
+    ) -> Result<RefreshModelCacheResponse, AdminServiceError> {
+        let resp = self
+            .token_manager
+            .get_available_models_for(id)
+            .await
+            .map_err(|e| self.classify_balance_error(e, id))?;
+        let count = resp.models.len();
+        crate::anthropic::model_cache::set_account_models(id, resp.models);
+
+        Ok(RefreshModelCacheResponse {
+            success: true,
+            refreshed: 1,
+            failed: 0,
+            count,
+        })
+    }
+
+    /// 刷新所有未禁用凭据的模型缓存
+    pub async fn refresh_all_model_cache(&self) -> RefreshModelCacheResponse {
+        let snapshot = self.token_manager.snapshot();
+        let mut account_models = HashMap::new();
+        let mut refreshed = 0_usize;
+        let mut failed = 0_usize;
+
+        for entry in snapshot.entries.into_iter() {
+            if entry.disabled {
+                continue;
+            }
+            match self.token_manager.get_available_models_for(entry.id).await {
+                Ok(resp) => {
+                    refreshed += 1;
+                    account_models.insert(entry.id, resp.models);
+                }
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!("刷新凭据 #{} 模型缓存失败: {}", entry.id, e);
+                }
+            }
+        }
+
+        if !account_models.is_empty() {
+            crate::anthropic::model_cache::replace_all(account_models);
+        }
+        let count = crate::anthropic::model_cache::get_models().len();
+        RefreshModelCacheResponse {
+            success: failed == 0,
+            refreshed,
+            failed,
+            count,
+        }
+    }
+
+    /// 启动模型缓存后台刷新调度器
+    pub fn start_model_cache_refresher(self: &Arc<Self>, interval: std::time::Duration) {
+        let svc = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            loop {
+                let started = std::time::Instant::now();
+                let summary = svc.refresh_all_model_cache().await;
+                tracing::info!(
+                    "模型缓存后台刷新完成：成功 {}，失败 {}，缓存模型 {}，耗时 {:.1}s",
+                    summary.refreshed,
+                    summary.failed,
+                    summary.count,
+                    started.elapsed().as_secs_f32()
+                );
+                tokio::time::sleep(interval).await;
+            }
+        });
     }
 
     /// 设置模型配置：校验 → 持久化到 config.json → 热更新全局注册表（立即生效）
@@ -730,6 +877,46 @@ impl AdminService {
         }
     }
 
+    fn ensure_proxy_pool_file(path: &PathBuf) {
+        if path.exists() {
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("创建代理列表目录失败: {}", e);
+                return;
+            }
+        }
+        if let Err(e) = std::fs::write(path, "[]") {
+            tracing::warn!("创建代理列表文件失败: {}", e);
+        }
+    }
+
+    fn load_proxy_pool(&self) -> Vec<ProxyPoolEntry> {
+        Self::ensure_proxy_pool_file(&self.proxy_pool_path);
+        let content = match std::fs::read_to_string(&self.proxy_pool_path) {
+            Ok(content) => content,
+            Err(e) => {
+                tracing::warn!("读取代理列表失败: {}", e);
+                return Vec::new();
+            }
+        };
+        match serde_json::from_str::<Vec<ProxyPoolEntry>>(&content) {
+            Ok(proxies) => proxies,
+            Err(e) => {
+                tracing::warn!("解析代理列表失败，将返回空列表: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    fn save_proxy_pool(&self, proxies: &[ProxyPoolEntry]) -> Result<(), AdminServiceError> {
+        let json = serde_json::to_string_pretty(proxies)
+            .map_err(|e| AdminServiceError::InternalError(format!("序列化代理列表失败: {}", e)))?;
+        std::fs::write(&self.proxy_pool_path, json)
+            .map_err(|e| AdminServiceError::InternalError(format!("保存代理列表失败: {}", e)))
+    }
+
     // ============ 错误分类 ============
 
     /// 分类简单操作错误（set_disabled, set_priority, reset_and_enable）
@@ -852,6 +1039,118 @@ impl AdminService {
             cache.remove(&id);
         }
         Ok(())
+    }
+
+    // ============ 代理管理 ============
+
+    pub fn get_proxy_pool(&self) -> ProxyPoolResponse {
+        let proxies = self.load_proxy_pool();
+        ProxyPoolResponse {
+            total: proxies.len(),
+            proxies,
+        }
+    }
+
+    pub fn add_proxy(&self, req: AddProxyRequest) -> Result<ProxyPoolEntry, AdminServiceError> {
+        let url = req.url.trim();
+        if url.is_empty() {
+            return Err(AdminServiceError::InvalidCredential("代理 URL 不能为空".to_string()));
+        }
+
+        let mut proxies = self.load_proxy_pool();
+        if proxies.iter().any(|proxy| proxy.url == url) {
+            return Err(AdminServiceError::InvalidCredential("代理已存在".to_string()));
+        }
+
+        let next_id = proxies.iter().map(|proxy| proxy.id).max().unwrap_or(0) + 1;
+        let entry = ProxyPoolEntry {
+            id: next_id,
+            url: url.to_string(),
+            label: req.label.and_then(|label| {
+                let trimmed = label.trim().to_string();
+                if trimmed.is_empty() { None } else { Some(trimmed) }
+            }),
+            created_at: Utc::now().to_rfc3339(),
+            health: ProxyHealth::Unknown,
+            latency_ms: None,
+            last_checked_at: None,
+        };
+        proxies.insert(0, entry.clone());
+        self.save_proxy_pool(&proxies)?;
+        Ok(entry)
+    }
+
+    pub fn delete_proxy(&self, id: u64) -> Result<(), AdminServiceError> {
+        let mut proxies = self.load_proxy_pool();
+        let before = proxies.len();
+        proxies.retain(|proxy| proxy.id != id);
+        if proxies.len() == before {
+            return Err(AdminServiceError::NotFound { id });
+        }
+        self.save_proxy_pool(&proxies)
+    }
+
+    pub async fn check_proxy(&self, id: u64) -> Result<ProxyCheckResponse, AdminServiceError> {
+        let mut proxies = self.load_proxy_pool();
+        let Some(index) = proxies.iter().position(|proxy| proxy.id == id) else {
+            return Err(AdminServiceError::NotFound { id });
+        };
+
+        let (health, latency_ms) = self.probe_proxy(&proxies[index].url).await;
+        let checked_at = Utc::now().to_rfc3339();
+        proxies[index].health = health;
+        proxies[index].latency_ms = latency_ms;
+        proxies[index].last_checked_at = Some(checked_at.clone());
+        let response = ProxyCheckResponse {
+            id,
+            health,
+            latency_ms,
+            last_checked_at: Some(checked_at),
+        };
+        self.save_proxy_pool(&proxies)?;
+        Ok(response)
+    }
+
+    pub async fn check_all_proxies(&self) -> Result<ProxyCheckAllResponse, AdminServiceError> {
+        let mut proxies = self.load_proxy_pool();
+        let mut healthy = 0;
+        let mut unhealthy = 0;
+
+        for proxy in proxies.iter_mut() {
+            let (health, latency_ms) = self.probe_proxy(&proxy.url).await;
+            proxy.health = health;
+            proxy.latency_ms = latency_ms;
+            proxy.last_checked_at = Some(Utc::now().to_rfc3339());
+            match health {
+                ProxyHealth::Healthy => healthy += 1,
+                ProxyHealth::Unhealthy => unhealthy += 1,
+                ProxyHealth::Unknown => {}
+            }
+        }
+
+        self.save_proxy_pool(&proxies)?;
+        Ok(ProxyCheckAllResponse { healthy, unhealthy })
+    }
+
+    async fn probe_proxy(&self, url: &str) -> (ProxyHealth, Option<u32>) {
+        let proxy = ProxyConfig::new(url);
+        let tls_backend = self.token_manager.config().tls_backend;
+        let Ok(client) = build_client(Some(&proxy), 10, tls_backend) else {
+            return (ProxyHealth::Unhealthy, None);
+        };
+
+        let start = Instant::now();
+        let result = client
+            .get("https://www.google.com/generate_204")
+            .send()
+            .await;
+        match result {
+            Ok(response) if response.status().is_success() || response.status().is_redirection() => {
+                let ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+                (ProxyHealth::Healthy, Some(ms))
+            }
+            _ => (ProxyHealth::Unhealthy, None),
+        }
     }
 
     /// 设置超额开关（POST /credentials/:id/overage）

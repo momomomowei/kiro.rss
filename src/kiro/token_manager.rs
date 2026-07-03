@@ -20,6 +20,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::http_client::{ProxyConfig, build_client};
 use crate::kiro::machine_id;
+use crate::kiro::model::available_models::ListAvailableModelsResponse;
 use crate::kiro::model::credentials::KiroCredentials;
 use crate::kiro::model::token_refresh::{
     IdcRefreshRequest, IdcRefreshResponse, RefreshRequest, RefreshResponse,
@@ -615,6 +616,72 @@ pub(crate) async fn get_usage_limits(
     Ok(data)
 }
 
+/// 获取该凭据当前可用的模型列表
+pub(crate) async fn get_available_models(
+    credentials: &KiroCredentials,
+    config: &Config,
+    token: &str,
+    proxy: Option<&ProxyConfig>,
+) -> anyhow::Result<ListAvailableModelsResponse> {
+    tracing::debug!("正在获取可用模型列表...");
+
+    let region = credentials.effective_api_region(config);
+    let host = format!("q.{}.amazonaws.com", region);
+    let machine_id = machine_id::generate_from_credentials(credentials, config);
+    let kiro_version = &config.kiro_version;
+    let os_name = &config.system_version;
+    let node_version = &config.node_version;
+
+    let mut url = format!(
+        "https://{}/ListAvailableModels?origin=AI_EDITOR&maxResults=50",
+        host
+    );
+    if let Some(profile_arn) = &credentials.profile_arn {
+        url.push_str(&format!("&profileArn={}", urlencoding::encode(profile_arn)));
+    }
+
+    let user_agent = format!(
+        "aws-sdk-js/1.0.0 ua/2.1 os/{} lang/js md/nodejs#{} api/codewhispererruntime#1.0.0 m/N,E KiroIDE-{}-{}",
+        os_name, node_version, kiro_version, machine_id
+    );
+    let amz_user_agent = format!(
+        "aws-sdk-js/1.0.0 KiroIDE-{}-{}",
+        kiro_version, machine_id
+    );
+
+    let client = build_client(proxy, 60, config.tls_backend)?;
+    let mut request = client
+        .get(&url)
+        .header("x-amz-user-agent", &amz_user_agent)
+        .header("user-agent", &user_agent)
+        .header("host", &host)
+        .header("amz-sdk-invocation-id", uuid::Uuid::new_v4().to_string())
+        .header("amz-sdk-request", "attempt=1; max=1")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Connection", "close");
+
+    if credentials.is_api_key_credential() {
+        request = request.header("tokentype", "API_KEY");
+    }
+
+    let response = request.send().await?;
+    let status = response.status();
+    if status.is_success() {
+        let data: ListAvailableModelsResponse = response.json().await?;
+        return Ok(data);
+    }
+
+    let body_text = response.text().await.unwrap_or_default();
+    let error_msg = match status.as_u16() {
+        401 => "认证失败，Token 无效或已过期",
+        403 => "权限不足，无法获取可用模型",
+        429 => "请求过于频繁，已被限流",
+        500..=599 => "服务器错误，AWS 服务暂时不可用",
+        _ => "获取可用模型失败",
+    };
+    bail!("{}: {} {}", error_msg, status, body_text);
+}
+
 // ============================================================================
 // 多凭据 Token 管理器
 // ============================================================================
@@ -747,8 +814,6 @@ pub struct MultiTokenManager {
     refresh_lock: TokioMutex<()>,
     /// 凭据文件路径（用于回写）
     credentials_path: Option<PathBuf>,
-    /// 是否为多凭据格式（数组格式才回写）
-    is_multiple_format: bool,
     /// 负载均衡模式（运行时可修改）
     load_balancing_mode: Mutex<String>,
     /// 账号-模型级上游保护配置（运行时可修改）
@@ -792,13 +857,13 @@ impl MultiTokenManager {
     /// * `credentials` - 凭据列表
     /// * `proxy` - 可选的代理配置
     /// * `credentials_path` - 凭据文件路径（用于回写）
-    /// * `is_multiple_format` - 是否为多凭据格式（数组格式才回写）
+    /// * `_is_multiple_format` - 兼容旧调用参数；持久化时现在统一写回数组格式
     pub fn new(
         config: Config,
         credentials: Vec<KiroCredentials>,
         proxy: Option<ProxyConfig>,
         credentials_path: Option<PathBuf>,
-        is_multiple_format: bool,
+        _is_multiple_format: bool,
     ) -> anyhow::Result<Self> {
         // 计算当前最大 ID，为没有 ID 的凭据分配新 ID
         let max_existing_id = credentials.iter().filter_map(|c| c.id).max().unwrap_or(0);
@@ -889,7 +954,6 @@ impl MultiTokenManager {
             current_id: Mutex::new(initial_id),
             refresh_lock: TokioMutex::new(()),
             credentials_path,
-            is_multiple_format,
             load_balancing_mode: Mutex::new(load_balancing_mode),
             upstream_protection: Mutex::new(upstream_protection),
             upstream_model_state: Arc::new(Mutex::new(HashMap::new())),
@@ -1217,7 +1281,7 @@ impl MultiTokenManager {
                     }
                 }
 
-                // 回写凭据到文件（仅多凭据格式），失败只记录警告
+                // 回写凭据到文件，失败只记录警告
                 if let Err(e) = self.persist_credentials() {
                     tracing::warn!("Token 刷新后持久化失败（不影响本次请求）: {}", e);
                 }
@@ -1253,9 +1317,10 @@ impl MultiTokenManager {
 
     /// 将凭据列表回写到源文件
     ///
-    /// 仅在以下条件满足时回写：
-    /// - 源文件是多凭据格式（数组）
-    /// - credentials_path 已设置
+    /// 仅在 credentials_path 已设置时回写。
+    ///
+    /// 即使启动时源文件是单凭据对象格式，新增凭据后也会回写为数组格式，
+    /// 否则 Admin 批量导入只会进入内存，重启后丢失。
     ///
     /// # Returns
     /// - `Ok(true)` - 成功写入文件
@@ -1263,11 +1328,6 @@ impl MultiTokenManager {
     /// - `Err(_)` - 写入失败
     fn persist_credentials(&self) -> anyhow::Result<bool> {
         use anyhow::Context;
-
-        // 仅多凭据格式才回写
-        if !self.is_multiple_format {
-            return Ok(false);
-        }
 
         let path = match &self.credentials_path {
             Some(p) => p,
@@ -1982,6 +2042,36 @@ impl MultiTokenManager {
         result
     }
 
+    /// 以额度耗尽为原因禁用凭据（Admin 刷新额度后使用）。
+    pub fn disable_quota_exceeded(&self, id: u64) -> anyhow::Result<()> {
+        {
+            let mut entries = self.entries.lock();
+            let mut current_id = self.current_id.lock();
+            let entry = entries
+                .iter_mut()
+                .find(|e| e.id == id)
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+
+            entry.disabled = true;
+            entry.disabled_reason = Some(DisabledReason::QuotaExceeded);
+            entry.last_used_at = Some(Utc::now().to_rfc3339());
+            entry.failure_count = MAX_FAILURES_PER_CREDENTIAL;
+
+            if *current_id == id {
+                if let Some(next) = entries
+                    .iter()
+                    .filter(|e| !e.disabled)
+                    .min_by_key(|e| e.credentials.priority)
+                {
+                    *current_id = next.id;
+                }
+            }
+        }
+        self.persist_credentials()?;
+        self.save_stats_debounced();
+        Ok(())
+    }
+
     /// 报告指定凭据的 refreshToken 永久失效（invalid_grant）。
     ///
     /// 立即禁用凭据，不累计、不重试。
@@ -2351,6 +2441,82 @@ impl MultiTokenManager {
         }
 
         Ok(usage_limits)
+    }
+
+    /// 获取指定凭据当前可用的模型列表（Admin API）
+    pub async fn get_available_models_for(
+        &self,
+        id: u64,
+    ) -> anyhow::Result<ListAvailableModelsResponse> {
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+        };
+
+        let token = if credentials.is_api_key_credential() {
+            credentials
+                .kiro_api_key
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("API Key 凭据缺少 kiroApiKey"))?
+        } else {
+            let needs_refresh =
+                is_token_expired(&credentials) || is_token_expiring_soon(&credentials);
+
+            if needs_refresh {
+                let _guard = self.refresh_lock.lock().await;
+                let current_creds = {
+                    let entries = self.entries.lock();
+                    entries
+                        .iter()
+                        .find(|e| e.id == id)
+                        .map(|e| e.credentials.clone())
+                        .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+                };
+
+                if is_token_expired(&current_creds) || is_token_expiring_soon(&current_creds) {
+                    let effective_proxy = current_creds.effective_proxy(self.proxy.as_ref());
+                    let new_creds =
+                        refresh_token(&current_creds, &self.config, effective_proxy.as_ref())
+                            .await?;
+                    {
+                        let mut entries = self.entries.lock();
+                        if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                            entry.credentials = new_creds.clone();
+                        }
+                    }
+                    if let Err(e) = self.persist_credentials() {
+                        tracing::warn!("Token 刷新后持久化失败（不影响本次请求）: {}", e);
+                    }
+                    new_creds
+                        .access_token
+                        .ok_or_else(|| anyhow::anyhow!("刷新后无 access_token"))?
+                } else {
+                    current_creds
+                        .access_token
+                        .ok_or_else(|| anyhow::anyhow!("凭据无 access_token"))?
+                }
+            } else {
+                credentials
+                    .access_token
+                    .ok_or_else(|| anyhow::anyhow!("凭据无 access_token"))?
+            }
+        };
+
+        let credentials = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| e.credentials.clone())
+                .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?
+        };
+
+        let effective_proxy = credentials.effective_proxy(self.proxy.as_ref());
+        get_available_models(&credentials, &self.config, &token, effective_proxy.as_ref()).await
     }
 
     /// 添加新凭据（Admin API）

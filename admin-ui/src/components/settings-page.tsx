@@ -23,6 +23,7 @@ import {
   useSetKvCacheConfig,
   useModelsConfig,
   useSetModelsConfig,
+  useRefreshModelCache,
   useRestartService,
 } from '@/hooks/use-credentials'
 import type { ModelEntry } from '@/api/credentials'
@@ -133,8 +134,8 @@ function KeyRow({
 function KvCachePanel() {
   const { data: kvCacheConfig, isLoading } = useKvCacheConfig()
   const { mutate: setKvCacheConfig, isPending: saving } = useSetKvCacheConfig()
-  const [efficiency, setEfficiency] = useState(87)
-  const [ttl, setTtl] = useState(3600)
+  const [efficiency, setEfficiency] = useState(90)
+  const [ttl, setTtl] = useState(1800)
   const [dirty, setDirty] = useState(false)
 
   useEffect(() => {
@@ -211,7 +212,7 @@ function KvCachePanel() {
             <div>
               <h3 className="text-sm font-semibold">缓存效率系数</h3>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                控制模拟缓存命中率。例如 87% 表示将前缀匹配折算为约 87% 的实际缓存率
+                控制模拟缓存命中率。例如 90% 表示将前缀匹配折算为约 90% 的实际缓存率
               </p>
             </div>
             <input
@@ -254,7 +255,7 @@ function KvCachePanel() {
                 step={60}
                 value={ttl}
                 onChange={(e) => {
-                  setTtl(parseInt(e.target.value) || 3600)
+                  setTtl(parseInt(e.target.value) || 1800)
                   setDirty(true)
                 }}
                 className="flex-1 h-10 rounded-xl border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring tabular-nums"
@@ -284,6 +285,7 @@ const emptyModel = (): ModelEntry => ({
 function ModelsPanel() {
   const { data: modelsConfig, isLoading } = useModelsConfig()
   const { mutate: saveModels, isPending: saving } = useSetModelsConfig()
+  const { mutate: refreshModelCache, isPending: refreshingModelCache } = useRefreshModelCache()
   const { mutate: restart, isPending: restarting } = useRestartService()
   const [models, setModels] = useState<ModelEntry[]>([])
   const [dirty, setDirty] = useState(false)
@@ -335,6 +337,19 @@ function ModelsPanel() {
     })
   }
 
+  const handleRefreshModelCache = () => {
+    refreshModelCache(undefined, {
+      onSuccess: (res) => {
+        if (res.failed === 0) {
+          toast.success(`模型缓存刷新完成：成功 ${res.refreshed} 个凭据，缓存 ${res.count} 个模型`)
+        } else {
+          toast.warning(`模型缓存刷新完成：成功 ${res.refreshed} 个，失败 ${res.failed} 个，缓存 ${res.count} 个模型`)
+        }
+      },
+      onError: (err) => toast.error('刷新模型缓存失败: ' + extractErrorMessage(err)),
+    })
+  }
+
   return (
     <Card className="glass-card shadow-apple-sm">
       <CardContent className="p-5 space-y-4">
@@ -346,11 +361,21 @@ function ModelsPanel() {
             <div>
               <h3 className="text-sm font-semibold">模型配置</h3>
               <p className="text-[12px] text-muted-foreground">
-                新增/编辑模型映射，保存即热更新生效（无需重启）
+                上游模型缓存优先生效，手动映射作为补充配置，保存即热更新
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 rounded-full"
+              onClick={handleRefreshModelCache}
+              disabled={refreshingModelCache}
+            >
+              <RefreshCw className={`mr-1 h-3.5 w-3.5 ${refreshingModelCache ? 'animate-spin' : ''}`} />
+              刷新模型缓存
+            </Button>
             <Button
               variant="outline"
               size="sm"

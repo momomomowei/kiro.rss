@@ -1,0 +1,19 @@
+services:
+  kiro-rss:
+    image: kiro-rss:local
+    container_name: kiro-rss
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8990:8990"
+    volumes:
+      - ./data/:/app/config/
+    mem_limit: 512m
+    restart: unless-stopped
+    networks:
+      - sub2api-shared
+
+networks:
+  sub2api-shared:
+    external: true
+    name: sub2api-shared-network

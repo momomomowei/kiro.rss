@@ -68,6 +68,12 @@ pub struct CredentialStatusItem {
     /// 凭据级 API Region（用于 API 请求）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_region: Option<String>,
+    /// 后端缓存的最近一次余额（用于管理页首屏直接展示）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance: Option<BalanceResponse>,
+    /// 余额缓存更新时间（Unix 秒）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub balance_updated_at: Option<f64>,
 }
 
 // ============ 操作请求 ============
@@ -94,6 +100,9 @@ pub struct SetPriorityRequest {
 pub struct AddCredentialRequest {
     /// 刷新令牌（OAuth 凭据必填，API Key 凭据不需要）
     pub refresh_token: Option<String>,
+
+    /// Profile ARN（Kiro / CodeWhisperer profile）
+    pub profile_arn: Option<String>,
 
     /// 认证方式（可选，默认 social）
     #[serde(default = "default_auth_method")]
@@ -182,6 +191,34 @@ pub struct BalanceResponse {
     pub usage_percentage: f64,
     /// 下次重置时间（Unix 时间戳）
     pub next_reset_at: Option<f64>,
+}
+
+/// 指定凭据可用模型响应
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableModelsResponse {
+    pub id: u64,
+    pub models: Vec<AvailableModelItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableModelItem {
+    pub model_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<i64>,
+}
+
+/// 余额查询参数
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceQuery {
+    /// 是否绕过缓存，强制请求上游
+    pub force: Option<bool>,
 }
 
 // ============ 请求明细 ============
@@ -280,6 +317,25 @@ pub struct SetKvCacheConfigRequest {
     pub kv_cache_ttl_secs: Option<i64>,
 }
 
+/// 运行时模型缓存快照
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCacheResponse {
+    pub cached_at: Option<i64>,
+    pub models: Vec<crate::kiro::model::available_models::UpstreamModel>,
+    pub accounts: std::collections::HashMap<u64, Vec<String>>,
+}
+
+/// 模型缓存刷新结果
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshModelCacheResponse {
+    pub success: bool,
+    pub refreshed: usize,
+    pub failed: usize,
+    pub count: usize,
+}
+
 /// 负载均衡模式响应
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,6 +429,66 @@ pub struct UpdateCredentialRequest {
     pub proxy_url: Option<String>,
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
+}
+
+// ============ 代理管理 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyPoolEntry {
+    pub id: u64,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub created_at: String,
+    #[serde(default)]
+    pub health: ProxyHealth,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_checked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ProxyHealth {
+    #[default]
+    Unknown,
+    Healthy,
+    Unhealthy,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyPoolResponse {
+    pub total: usize,
+    pub proxies: Vec<ProxyPoolEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddProxyRequest {
+    pub url: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCheckResponse {
+    pub id: u64,
+    pub health: ProxyHealth,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_checked_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyCheckAllResponse {
+    pub healthy: usize,
+    pub unhealthy: usize,
 }
 
 // ============ 超额开关 ============

@@ -1,0 +1,10 @@
+[
+  {
+    "id": 1,
+    "url": "socks5://V2xusbpEOA6N:Esvwxqvy8ODr@23.231.120.50:7093",
+    "label": "美国 - 阿什本",
+    "createdAt": "2026-07-03T14:18:30.382828600+00:00",
+    "health": "unhealthy",
+    "lastCheckedAt": "2026-07-03T15:43:29.224766400+00:00"
+  }
+]

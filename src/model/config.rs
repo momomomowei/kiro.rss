@@ -228,15 +228,15 @@ pub struct Config {
     #[serde(default)]
     pub endpoints: HashMap<String, serde_json::Value>,
 
-    /// KV 缓存读取效率折扣（0.0~1.0，默认 0.87）
+    /// KV 缓存读取效率折扣（0.0~1.0，默认 0.90）
     ///
     /// 模拟真实 KV cache 并非 100% 可复用的场景。
     /// 匹配到的前缀 tokens 乘以此系数作为 cache_read，差额计入 cache_creation。
-    /// 例如 0.87 可将 ~98% 的前缀命中率折算为 ~85% 的实际缓存率。
+    /// 例如 0.90 可将 ~98% 的前缀命中率折算为 ~88% 的实际缓存率。
     #[serde(default = "default_cache_read_efficiency")]
     pub cache_read_efficiency: f64,
 
-    /// KV 缓存状态在内存中的存活时间（秒，默认 3600 即 1 小时）
+    /// KV 缓存状态在内存中的存活时间（秒，默认 1800 即 30 分钟）
     ///
     /// 超过此时间的历史 prompt 记录将被清理，不再参与前缀匹配。
     /// 设置更短的值会降低缓存命中率，更长则提高命中率。
@@ -305,11 +305,11 @@ fn default_endpoint() -> String {
 }
 
 fn default_cache_read_efficiency() -> f64 {
-    0.87
+    0.90
 }
 
 fn default_kv_cache_ttl_secs() -> i64 {
-    3600
+    1800
 }
 
 impl Default for Config {

@@ -9,7 +9,7 @@ use axum::{
 use super::{
     middleware::AdminState,
     types::{
-        AddCredentialRequest, RequestDetailsQuery, SetDisabledRequest,
+        AddCredentialRequest, AddProxyRequest, BalanceQuery, RequestDetailsQuery, SetDisabledRequest,
         SetKvCacheConfigRequest, SetLoadBalancingModeRequest, SetModelsRequest, SetOverageRequest,
         SetPriorityRequest, SuccessResponse, UpdateCredentialRequest,
     },
@@ -76,8 +76,9 @@ pub async fn reset_failure_count(
 pub async fn get_credential_balance(
     State(state): State<AdminState>,
     Path(id): Path<u64>,
+    Query(query): Query<BalanceQuery>,
 ) -> impl IntoResponse {
-    match state.service.get_balance(id).await {
+    match state.service.get_balance(id, query.force.unwrap_or(false)).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
@@ -119,6 +120,18 @@ pub async fn force_refresh_token(
             id
         )))
         .into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/credentials/:id/models
+/// 实时获取指定凭据可用模型
+pub async fn get_credential_models(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.get_available_models(id).await {
+        Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }
@@ -182,6 +195,30 @@ pub async fn set_kv_cache_config(
     }
 }
 
+/// GET /api/admin/model-cache
+/// 获取运行时模型缓存
+pub async fn get_model_cache(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_model_cache()).into_response()
+}
+
+/// POST /api/admin/credentials/:id/models/refresh
+/// 刷新指定凭据模型缓存
+pub async fn refresh_credential_models(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.refresh_model_cache_for(id).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/model-cache/refresh
+/// 刷新全部未禁用凭据模型缓存
+pub async fn refresh_all_models(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.refresh_all_model_cache().await).into_response()
+}
+
 /// GET /api/admin/config/models
 /// 获取模型配置
 pub async fn get_models_config(State(state): State<AdminState>) -> impl IntoResponse {
@@ -218,6 +255,57 @@ pub async fn update_credential(
 ) -> impl IntoResponse {
     match state.service.update_credential(id, payload) {
         Ok(_) => Json(SuccessResponse::new(format!("凭据 #{} 已更新", id))).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// GET /api/admin/proxy-pool
+/// 获取代理列表
+pub async fn get_proxy_pool(State(state): State<AdminState>) -> impl IntoResponse {
+    Json(state.service.get_proxy_pool()).into_response()
+}
+
+/// POST /api/admin/proxy-pool
+/// 添加代理
+pub async fn add_proxy(
+    State(state): State<AdminState>,
+    Json(payload): Json<AddProxyRequest>,
+) -> impl IntoResponse {
+    match state.service.add_proxy(payload) {
+        Ok(entry) => Json(entry).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// DELETE /api/admin/proxy-pool/:id
+/// 删除代理
+pub async fn delete_proxy(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.delete_proxy(id) {
+        Ok(_) => Json(SuccessResponse::new(format!("代理 #{} 已删除", id))).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/proxy-pool/:id/check
+/// 测试单个代理
+pub async fn check_proxy(
+    State(state): State<AdminState>,
+    Path(id): Path<u64>,
+) -> impl IntoResponse {
+    match state.service.check_proxy(id).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
+    }
+}
+
+/// POST /api/admin/proxy-pool/check-all
+/// 测试全部代理
+pub async fn check_all_proxies(State(state): State<AdminState>) -> impl IntoResponse {
+    match state.service.check_all_proxies().await {
+        Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }
 }

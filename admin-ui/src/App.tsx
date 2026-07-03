@@ -1,9 +1,12 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { storage } from '@/lib/storage'
 import { LoginPage } from '@/components/login-page'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { Activity, Settings as SettingsIcon, Server, LogOut, Moon, Sun } from 'lucide-react'
+import { Activity, Database, Network, Settings as SettingsIcon, Server, LogOut, Moon, RefreshCw, Sun } from 'lucide-react'
+import { useLoadBalancingMode, useSetLoadBalancingMode } from '@/hooks/use-credentials'
 
 const Dashboard = lazy(() =>
   import('@/components/dashboard').then((m) => ({ default: m.Dashboard })),
@@ -14,18 +17,26 @@ const OverviewPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('@/components/settings-page').then((m) => ({ default: m.SettingsPage })),
 )
+const ProxyPage = lazy(() =>
+  import('@/components/proxy-page').then((m) => ({ default: m.ProxyPage })),
+)
+const RequestDetailsPanel = lazy(() =>
+  import('@/components/request-details-panel').then((m) => ({ default: m.RequestDetailsPanel })),
+)
 
-type Tab = 'overview' | 'credentials' | 'settings'
+type Tab = 'overview' | 'credentials' | 'proxies' | 'details' | 'settings'
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'overview', label: '概览', icon: <Activity className="h-3.5 w-3.5" /> },
   { key: 'credentials', label: '凭据管理', icon: <Server className="h-3.5 w-3.5" /> },
+  { key: 'proxies', label: '代理管理', icon: <Network className="h-3.5 w-3.5" /> },
+  { key: 'details', label: '请求记录', icon: <Database className="h-3.5 w-3.5" /> },
   { key: 'settings', label: '设置', icon: <SettingsIcon className="h-3.5 w-3.5" /> },
 ]
 
 function readTabFromHash(): Tab {
   const h = window.location.hash.replace(/^#\/?/, '')
-  if (h === 'credentials' || h === 'settings' || h === 'overview') return h
+  if (h === 'credentials' || h === 'proxies' || h === 'details' || h === 'settings' || h === 'overview') return h
   return 'overview'
 }
 
@@ -99,6 +110,7 @@ function App() {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <TopCredentialActions />
             <Button
               variant="ghost"
               size="icon"
@@ -142,11 +154,57 @@ function App() {
         >
           {tab === 'overview' && <OverviewPage />}
           {tab === 'credentials' && <Dashboard onLogout={handleLogout} />}
+          {tab === 'proxies' && <ProxyPage />}
+          {tab === 'details' && <RequestDetailsPanel />}
           {tab === 'settings' && <SettingsPage />}
         </Suspense>
       </main>
 
       <Toaster position="top-center" />
+    </>
+  )
+}
+
+function TopCredentialActions() {
+  const queryClient = useQueryClient()
+  const { data: loadBalancingData, isLoading: isLoadingMode } = useLoadBalancingMode()
+  const { mutate: setLoadBalancingMode, isPending: isSettingMode } = useSetLoadBalancingMode()
+
+  const handleRefresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    toast.success('已刷新凭据列表')
+  }
+
+  const handleToggleLoadBalancing = () => {
+    if (!loadBalancingData) return
+
+    const newMode = loadBalancingData.mode === 'priority' ? 'balanced' : 'priority'
+    setLoadBalancingMode(newMode, {
+      onSuccess: () => {
+        const modeName = newMode === 'priority' ? '优先级模式' : '均衡负载模式'
+        toast.success(`已切换到${modeName}`)
+      },
+      onError: (err) => {
+        toast.error('切换模式失败: ' + (err as Error).message)
+      },
+    })
+  }
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8"
+        onClick={handleToggleLoadBalancing}
+        disabled={isLoadingMode || isSettingMode}
+        title="切换负载均衡模式"
+      >
+        {isLoadingMode ? '加载中...' : (loadBalancingData?.mode === 'priority' ? '优先级模式' : '均衡负载')}
+      </Button>
+      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleRefresh} title="刷新凭据列表">
+        <RefreshCw className="h-4 w-4" />
+      </Button>
     </>
   )
 }

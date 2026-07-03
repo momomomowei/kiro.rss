@@ -26,6 +26,7 @@ mod converter;
 mod failure_prompt_log;
 mod handlers;
 pub mod kv_cache;
+pub mod model_cache;
 mod middleware;
 pub mod model_registry;
 mod router;

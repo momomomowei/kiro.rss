@@ -6,6 +6,8 @@ import {
   resetCredentialFailure,
   forceRefreshToken,
   getCredentialBalance,
+  getCredentialModels,
+  getModelCache,
   addCredential,
   deleteCredential,
   getLoadBalancingMode,
@@ -19,6 +21,7 @@ import {
   getAdminKeys,
   getModelsConfig,
   setModelsConfig,
+  refreshModelCache,
   restartService,
   type KvCacheConfig,
   type ModelEntry,
@@ -41,6 +44,23 @@ export function useCredentialBalance(id: number | null) {
     queryFn: () => getCredentialBalance(id!),
     enabled: id !== null,
     retry: false, // 余额查询失败时不重试（避免重复请求被封禁的账号）
+  })
+}
+
+export function useCredentialModels(id: number | null) {
+  return useQuery({
+    queryKey: ['credential-models', id],
+    queryFn: () => getCredentialModels(id!),
+    enabled: id !== null,
+    retry: false,
+  })
+}
+
+export function useModelCache(enabled = true) {
+  return useQuery({
+    queryKey: ['model-cache'],
+    queryFn: getModelCache,
+    enabled,
   })
 }
 
@@ -175,6 +195,13 @@ export function useSetModelsConfig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['modelsConfig'] })
     },
+  })
+}
+
+// 刷新上游模型缓存
+export function useRefreshModelCache() {
+  return useMutation({
+    mutationFn: refreshModelCache,
   })
 }
 

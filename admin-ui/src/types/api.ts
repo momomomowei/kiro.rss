@@ -26,6 +26,8 @@ export interface CredentialStatusItem {
   apiRegion?: string | null
   refreshFailureCount: number
   disabledReason?: string
+  balance?: BalanceResponse
+  balanceUpdatedAt?: number
 }
 
 // 余额响应
@@ -40,6 +42,31 @@ export interface BalanceResponse {
   overageStatus?: string | null
   overageLimit?: number | null
   overageCharges?: number | null
+}
+
+export interface AvailableModelsResponse {
+  id: number
+  models: AvailableModelItem[]
+}
+
+export interface AvailableModelItem {
+  modelId: string
+  modelName?: string
+  description?: string
+  maxInputTokens?: number
+}
+
+export interface ModelCacheResponse {
+  cachedAt?: number
+  models: Array<{
+    modelId: string
+    modelName?: string
+    description?: string
+    tokenLimits?: {
+      maxInputTokens?: number
+    }
+  }>
+  accounts: Record<string, string[]>
 }
 
 // 更新凭据请求（PATCH /credentials/:id）
@@ -69,6 +96,38 @@ export interface SetOverageRequest {
   enabled: boolean
 }
 
+export interface ProxyPoolEntry {
+  id: number
+  url: string
+  label?: string
+  createdAt: string
+  health: 'unknown' | 'healthy' | 'unhealthy'
+  latencyMs?: number
+  lastCheckedAt?: string
+}
+
+export interface ProxyPoolResponse {
+  total: number
+  proxies: ProxyPoolEntry[]
+}
+
+export interface AddProxyRequest {
+  url: string
+  label?: string
+}
+
+export interface ProxyCheckResponse {
+  id: number
+  health: 'unknown' | 'healthy' | 'unhealthy'
+  latencyMs?: number
+  lastCheckedAt?: string
+}
+
+export interface ProxyCheckAllResponse {
+  healthy: number
+  unhealthy: number
+}
+
 // 成功响应
 export interface SuccessResponse {
   success: boolean
@@ -95,6 +154,7 @@ export interface SetPriorityRequest {
 // 添加凭据请求
 export interface AddCredentialRequest {
   refreshToken: string
+  profileArn?: string
   authMethod?: 'social' | 'idc'
   clientId?: string
   clientSecret?: string

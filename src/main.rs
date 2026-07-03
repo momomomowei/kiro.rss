@@ -159,6 +159,9 @@ async fn main() {
 
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     anthropic::kv_cache::set_kv_cache_config(config.cache_read_efficiency, config.kv_cache_ttl_secs);
+    if let Some(dir) = token_manager.cache_dir() {
+        anthropic::kv_cache::set_records_dir(dir);
+    }
     // 初始化全局模型注册表（供 /v1/models 与映射查询使用，admin 后台可热更新）
     anthropic::model_registry::set_models(config.models.clone());
     let anthropic_app = anthropic::create_router_with_provider(
@@ -184,6 +187,9 @@ async fn main() {
             let admin_service =
                 admin::AdminService::new(token_manager.clone(), endpoint_names.clone());
             let admin_state = admin::AdminState::new(admin_key, admin_service);
+            admin_state
+                .service
+                .start_model_cache_refresher(std::time::Duration::from_secs(30 * 60));
             let admin_app = admin::create_admin_router(admin_state);
 
             // 创建 Admin UI 路由

@@ -20,6 +20,7 @@ interface BatchImportDialogProps {
 
 interface CredentialInput {
   refreshToken: string
+  profileArn?: string
   clientId?: string
   clientSecret?: string
   region?: string
@@ -55,6 +56,7 @@ function parseCredentials(raw: string): CredentialInput[] {
     if (typeof obj.refreshToken === 'string' && obj.refreshToken.trim()) {
       results.push({
         refreshToken: (obj.refreshToken as string).trim(),
+        profileArn: typeof obj.profileArn === 'string' ? obj.profileArn : undefined,
         clientId: typeof obj.clientId === 'string' ? obj.clientId : undefined,
         clientSecret: typeof obj.clientSecret === 'string' ? obj.clientSecret : undefined,
         region: typeof obj.region === 'string' ? obj.region : undefined,
@@ -72,6 +74,12 @@ function parseCredentials(raw: string): CredentialInput[] {
     if (cred && typeof cred.refreshToken === 'string' && cred.refreshToken.trim()) {
       results.push({
         refreshToken: (cred.refreshToken as string).trim(),
+        profileArn:
+          typeof cred.profileArn === 'string'
+            ? cred.profileArn
+            : typeof obj.profileArn === 'string'
+              ? (obj.profileArn as string)
+              : undefined,
         clientId: typeof cred.clientId === 'string' ? cred.clientId : undefined,
         clientSecret: typeof cred.clientSecret === 'string' ? cred.clientSecret : undefined,
         region: typeof cred.region === 'string' ? cred.region : undefined,
@@ -192,6 +200,7 @@ export function BatchImportDialog({ open, onOpenChange }: BatchImportDialogProps
 
           const addedCred = await addCredential({
             refreshToken: token, authMethod,
+            profileArn: cred.profileArn?.trim() || undefined,
             authRegion: cred.authRegion?.trim() || cred.region?.trim() || undefined,
             apiRegion: cred.apiRegion?.trim() || undefined,
             clientId, clientSecret,

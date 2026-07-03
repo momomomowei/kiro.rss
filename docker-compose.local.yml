@@ -1,0 +1,14 @@
+services:
+  kiro-rss:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kiro-rss:local
+    container_name: kiro-rss
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8990:8990"
+    volumes:
+      - ./data/:/app/config/
+    restart: unless-stopped

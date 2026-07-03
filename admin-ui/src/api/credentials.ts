@@ -9,9 +9,16 @@ import type {
   AddCredentialRequest,
   AddCredentialResponse,
   RequestDetailsResponse,
+  AvailableModelsResponse,
+  ModelCacheResponse,
   UpdateCredentialRequest,
   AdminKeysResponse,
   SetOverageRequest,
+  ProxyPoolResponse,
+  ProxyPoolEntry,
+  AddProxyRequest,
+  ProxyCheckResponse,
+  ProxyCheckAllResponse,
 } from '@/types/api'
 
 // 创建 axios 实例
@@ -78,8 +85,20 @@ export async function forceRefreshToken(
 }
 
 // 获取凭据余额
-export async function getCredentialBalance(id: number): Promise<BalanceResponse> {
-  const { data } = await api.get<BalanceResponse>(`/credentials/${id}/balance`)
+export async function getCredentialBalance(id: number, force = false): Promise<BalanceResponse> {
+  const { data } = await api.get<BalanceResponse>(`/credentials/${id}/balance`, {
+    params: force ? { force: true } : undefined,
+  })
+  return data
+}
+
+export async function getCredentialModels(id: number): Promise<AvailableModelsResponse> {
+  const { data } = await api.get<AvailableModelsResponse>(`/credentials/${id}/models`)
+  return data
+}
+
+export async function getModelCache(): Promise<ModelCacheResponse> {
+  const { data } = await api.get<ModelCacheResponse>('/model-cache')
   return data
 }
 
@@ -142,6 +161,13 @@ export interface ModelsConfig {
   models: ModelEntry[]
 }
 
+export interface RefreshModelCacheResponse {
+  success: boolean
+  refreshed: number
+  failed: number
+  count: number
+}
+
 // 获取模型配置
 export async function getModelsConfig(): Promise<ModelsConfig> {
   const { data } = await api.get<ModelsConfig>('/config/models')
@@ -151,6 +177,11 @@ export async function getModelsConfig(): Promise<ModelsConfig> {
 // 设置模型配置（保存即热更新生效）
 export async function setModelsConfig(models: ModelEntry[]): Promise<ModelsConfig> {
   const { data } = await api.put<ModelsConfig>('/config/models', { models })
+  return data
+}
+
+export async function refreshModelCache(): Promise<RefreshModelCacheResponse> {
+  const { data } = await api.post<RefreshModelCacheResponse>('/model-cache/refresh')
   return data
 }
 
@@ -198,5 +229,30 @@ export async function setCredentialOverage(
 // 获取 Admin Keys 信息
 export async function getAdminKeys(): Promise<AdminKeysResponse> {
   const { data } = await api.get<AdminKeysResponse>('/keys')
+  return data
+}
+
+export async function getProxyPool(): Promise<ProxyPoolResponse> {
+  const { data } = await api.get<ProxyPoolResponse>('/proxy-pool')
+  return data
+}
+
+export async function addProxy(req: AddProxyRequest): Promise<ProxyPoolEntry> {
+  const { data } = await api.post<ProxyPoolEntry>('/proxy-pool', req)
+  return data
+}
+
+export async function deleteProxy(id: number): Promise<SuccessResponse> {
+  const { data } = await api.delete<SuccessResponse>(`/proxy-pool/${id}`)
+  return data
+}
+
+export async function checkProxy(id: number): Promise<ProxyCheckResponse> {
+  const { data } = await api.post<ProxyCheckResponse>(`/proxy-pool/${id}/check`)
+  return data
+}
+
+export async function checkAllProxies(): Promise<ProxyCheckAllResponse> {
+  const { data } = await api.post<ProxyCheckAllResponse>('/proxy-pool/check-all')
   return data
 }
