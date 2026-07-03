@@ -15,7 +15,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -86,6 +86,8 @@ struct KvInMemoryState {
 static KV_STATE: OnceLock<Mutex<KvInMemoryState>> = OnceLock::new();
 static KV_RECORDS_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KV_CONFIG: OnceLock<Mutex<(f64, i64)>> = OnceLock::new();
+static KV_RECORDS_RETENTION_DAYS: OnceLock<Mutex<i64>> = OnceLock::new();
+static KV_RECORDS_LAST_PRUNED_AT: OnceLock<Mutex<i64>> = OnceLock::new();
 static KV_RECORDS_DIR: OnceLock<Mutex<PathBuf>> = OnceLock::new();
 
 /// 设置 KV cache 的运行时配置（可多次调用，后续调用会更新值）
@@ -108,6 +110,32 @@ pub fn get_kv_cache_ttl_secs() -> i64 {
         .unwrap_or(KV_STATE_TTL_SECS)
 }
 
+pub fn set_records_retention_days(days: i64) {
+    let days = normalize_records_retention_days(days);
+    match KV_RECORDS_RETENTION_DAYS.get() {
+        Some(lock) => *lock.lock() = days,
+        None => { let _ = KV_RECORDS_RETENTION_DAYS.set(Mutex::new(days)); }
+    }
+    let path = records_file_path(None);
+    if let Err(e) = prune_records_file(&path, days) {
+        tracing::warn!("自动清理请求记录失败: {}", e);
+    }
+}
+
+pub fn get_records_retention_days() -> i64 {
+    KV_RECORDS_RETENTION_DAYS
+        .get()
+        .map(|l| *l.lock())
+        .unwrap_or(1)
+}
+
+fn normalize_records_retention_days(days: i64) -> i64 {
+    match days {
+        1 | 3 | 10 | 30 => days,
+        _ => 1,
+    }
+}
+
 pub fn set_records_dir(dir: PathBuf) {
     match KV_RECORDS_DIR.get() {
         Some(lock) => *lock.lock() = dir,
@@ -115,9 +143,13 @@ pub fn set_records_dir(dir: PathBuf) {
             let _ = KV_RECORDS_DIR.set(Mutex::new(dir));
         }
     }
+    let path = records_file_path(None);
+    if let Err(e) = prune_records_file(&path, get_records_retention_days()) {
+        tracing::warn!("自动清理请求记录失败: {}", e);
+    }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KvCacheRecord {
     recorded_at: String,
@@ -169,6 +201,69 @@ fn append_record(path: &PathBuf, record: &KvCacheRecord) -> anyhow::Result<()> {
     let mut line = serde_json::to_vec(record)?;
     line.push(b'\n');
     file.write_all(&line)?;
+    maybe_prune_records_file(path)?;
+    Ok(())
+}
+
+fn maybe_prune_records_file(path: &PathBuf) -> anyhow::Result<()> {
+    const PRUNE_INTERVAL_SECS: i64 = 60;
+
+    let now_ts = Utc::now().timestamp();
+    let last_pruned_lock = KV_RECORDS_LAST_PRUNED_AT.get_or_init(|| Mutex::new(0));
+    {
+        let mut last_pruned_at = last_pruned_lock.lock();
+        if now_ts - *last_pruned_at < PRUNE_INTERVAL_SECS {
+            return Ok(());
+        }
+        *last_pruned_at = now_ts;
+    }
+
+    prune_records_file(path, get_records_retention_days())
+}
+
+fn prune_records_file(path: &PathBuf, retention_days: i64) -> anyhow::Result<()> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let cutoff = Utc::now() - Duration::days(normalize_records_retention_days(retention_days));
+    let mut changed = false;
+    let mut retained = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            changed = true;
+            continue;
+        }
+        let keep = serde_json::from_str::<KvCacheRecord>(trimmed)
+            .ok()
+            .and_then(|record| DateTime::parse_from_rfc3339(&record.recorded_at).ok())
+            .map(|recorded_at| recorded_at.with_timezone(&Utc) >= cutoff)
+            .unwrap_or(true);
+        if keep {
+            retained.push(trimmed.to_string());
+        } else {
+            changed = true;
+        }
+    }
+
+    if changed {
+        let next = if retained.is_empty() {
+            String::new()
+        } else {
+            let mut next = retained.join("\n");
+            next.push('\n');
+            next
+        };
+        fs::write(path, next)?;
+    }
+
     Ok(())
 }
 

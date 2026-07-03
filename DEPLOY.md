@@ -186,6 +186,7 @@ docker run -d --name kiro-rs \
 | `adminApiKey` | string | - | Admin API 密钥，配置后启用管理界面 |
 | `loadBalancingMode` | string | `priority` | `priority`（优先级）或 `balanced`（均衡） |
 | `extractThinking` | boolean | `true` | 非流式响应自动提取 `<thinking>` 块 |
+| `requestDetailsRetentionDays` | number | `1` | 请求记录自动保留天数，可选 `1`、`3`、`10`、`30` |
 | `countTokensApiUrl` | string | - | 外部 count_tokens API 地址 |
 | `countTokensApiKey` | string | - | 外部 count_tokens API 密钥 |
 | `countTokensAuthType` | string | `x-api-key` | `x-api-key` 或 `bearer` |

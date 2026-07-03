@@ -229,6 +229,8 @@ pub struct BalanceQuery {
 pub struct RequestDetailsQuery {
     /// 返回条数（默认 100，最大 1000）
     pub limit: Option<usize>,
+    /// 日志保留天数（允许 1/3/10/30，默认 1）
+    pub retention_days: Option<i64>,
 }
 
 /// 请求明细响应
@@ -305,6 +307,8 @@ pub struct KvCacheConfigResponse {
     pub cache_read_efficiency: f64,
     /// 缓存状态 TTL（秒）
     pub kv_cache_ttl_secs: i64,
+    /// 请求记录保留天数
+    pub request_details_retention_days: i64,
 }
 
 /// 设置 KV 缓存配置请求
@@ -315,6 +319,8 @@ pub struct SetKvCacheConfigRequest {
     pub cache_read_efficiency: Option<f64>,
     /// 缓存状态 TTL（秒）
     pub kv_cache_ttl_secs: Option<i64>,
+    /// 请求记录保留天数（允许 1/3/10/30）
+    pub request_details_retention_days: Option<i64>,
 }
 
 /// 运行时模型缓存快照

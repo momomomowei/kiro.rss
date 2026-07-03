@@ -132,6 +132,7 @@ export async function setLoadBalancingMode(mode: 'priority' | 'balanced'): Promi
 export interface KvCacheConfig {
   cacheReadEfficiency: number
   kvCacheTtlSecs: number
+  requestDetailsRetentionDays: number
 }
 
 // 获取 KV 缓存配置
@@ -193,8 +194,11 @@ export async function restartService(): Promise<{ success: boolean; message: str
 
 
 // 获取请求明细
-export async function getRequestDetails(limit?: number): Promise<RequestDetailsResponse> {
-  const params = limit ? { limit } : {}
+export async function getRequestDetails(limit?: number, retentionDays?: number): Promise<RequestDetailsResponse> {
+  const params = {
+    ...(limit ? { limit } : {}),
+    ...(retentionDays ? { retentionDays } : {}),
+  }
   const { data } = await api.get<RequestDetailsResponse>('/details', { params })
   return data
 }

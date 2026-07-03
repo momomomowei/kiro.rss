@@ -152,10 +152,10 @@ export function useSetLoadBalancingMode() {
 }
 
 // 查询请求明细
-export function useRequestDetails(limit?: number) {
+export function useRequestDetails(limit?: number, retentionDays?: number) {
   return useQuery({
-    queryKey: ['requestDetails', limit],
-    queryFn: () => getRequestDetails(limit),
+    queryKey: ['requestDetails', limit, retentionDays],
+    queryFn: () => getRequestDetails(limit, retentionDays),
     refetchInterval: 30000,
   })
 }

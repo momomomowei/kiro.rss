@@ -192,6 +192,7 @@ docker-compose up
 | `loadBalancingMode` | string | `priority` | 负载均衡模式：`priority`（按优先级）或 `balanced`（均衡分配） |
 | `extractThinking` | boolean | `true` | 非流式响应的 thinking 块提取。启用后 `<thinking>` 标签会被解析为独立的 `thinking` 内容块 |
 | `defaultEndpoint` | string | `ide` | 默认 Kiro 端点。凭据未显式指定 `endpoint` 时使用。当前支持：`ide` |
+| `requestDetailsRetentionDays` | number | `1` | 请求记录自动保留天数，可选 `1`、`3`、`10`、`30`，超过天数的旧日志会自动删除 |
 
 完整配置示例：
 
@@ -216,7 +217,8 @@ docker-compose up
    "proxyPassword": "pass",
    "adminApiKey": "sk-admin-your-secret-key",
    "loadBalancingMode": "priority",
-   "extractThinking": true
+   "extractThinking": true,
+   "requestDetailsRetentionDays": 1
 }
 ```
 

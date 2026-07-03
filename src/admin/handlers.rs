@@ -142,7 +142,10 @@ pub async fn get_request_details(
     State(state): State<AdminState>,
     Query(query): Query<RequestDetailsQuery>,
 ) -> impl IntoResponse {
-    match state.service.get_request_details(query.limit) {
+    match state
+        .service
+        .get_request_details(query.limit, query.retention_days)
+    {
         Ok(response) => Json(response).into_response(),
         Err(e) => (e.status_code(), Json(e.into_response())).into_response(),
     }

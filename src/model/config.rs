@@ -243,6 +243,10 @@ pub struct Config {
     #[serde(default = "default_kv_cache_ttl_secs")]
     pub kv_cache_ttl_secs: i64,
 
+    /// 请求记录保留天数（默认 1 天）
+    #[serde(default = "default_request_details_retention_days")]
+    pub request_details_retention_days: i64,
+
     /// 账号-模型级上游保护配置
     #[serde(default)]
     pub upstream_protection: UpstreamProtectionConfig,
@@ -312,6 +316,10 @@ fn default_kv_cache_ttl_secs() -> i64 {
     1800
 }
 
+fn default_request_details_retention_days() -> i64 {
+    1
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -339,6 +347,7 @@ impl Default for Config {
             endpoints: HashMap::new(),
             cache_read_efficiency: default_cache_read_efficiency(),
             kv_cache_ttl_secs: default_kv_cache_ttl_secs(),
+            request_details_retention_days: default_request_details_retention_days(),
             upstream_protection: UpstreamProtectionConfig::default(),
             models: Vec::new(),
             config_path: None,

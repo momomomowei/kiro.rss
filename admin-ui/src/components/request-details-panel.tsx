@@ -5,10 +5,24 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { useCredentials, useRequestDetails, useClearRequestDetails } from '@/hooks/use-credentials'
+import {
+  useCredentials,
+  useRequestDetails,
+  useClearRequestDetails,
+  useKvCacheConfig,
+  useSetKvCacheConfig,
+} from '@/hooks/use-credentials'
 import { extractErrorMessage } from '@/lib/utils'
 
 type RecordFilter = 'all' | 'hit' | 'miss'
+type RetentionDays = 1 | 3 | 10 | 30
+const RETENTION_STORAGE_KEY = 'kiro-admin-request-details-retention-days'
+
+function readRetentionDays(): RetentionDays {
+  if (typeof window === 'undefined') return 1
+  const value = Number(window.localStorage.getItem(RETENTION_STORAGE_KEY))
+  return value === 1 || value === 3 || value === 10 || value === 30 ? value : 1
+}
 
 function formatTime(isoString: string): string {
   const d = new Date(isoString)
@@ -29,17 +43,11 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function modelShortName(model: string): string {
-  if (model.includes('opus')) return 'Opus'
-  if (model.includes('sonnet')) return 'Sonnet'
-  if (model.includes('haiku')) return 'Haiku'
-  return model || '-'
-}
-
 function modelColor(model: string): string {
-  if (model.includes('opus')) return 'text-purple-600 dark:text-purple-400'
-  if (model.includes('sonnet')) return 'text-blue-600 dark:text-blue-400'
-  if (model.includes('haiku')) return 'text-emerald-600 dark:text-emerald-400'
+  const normalized = model.toLowerCase()
+  if (normalized.includes('opus')) return 'text-purple-600 dark:text-purple-400'
+  if (normalized.includes('sonnet')) return 'text-blue-600 dark:text-blue-400'
+  if (normalized.includes('haiku')) return 'text-emerald-600 dark:text-emerald-400'
   return ''
 }
 
@@ -61,11 +69,30 @@ const controlClass =
 
 export function RequestDetailsPanel() {
   const [limit, setLimit] = useState(100)
+  const [retentionDays, setRetentionDays] = useState<RetentionDays>(readRetentionDays)
   const [filter, setFilter] = useState<RecordFilter>('all')
   const [autoRefresh, setAutoRefresh] = useState(false)
   const { data: credentialsData } = useCredentials()
-  const { data, isLoading, refetch } = useRequestDetails(limit)
+  const { data: kvCacheConfig } = useKvCacheConfig()
+  const { mutate: setKvCacheConfig } = useSetKvCacheConfig()
+  const { data, isLoading, refetch } = useRequestDetails(limit, retentionDays)
   const { mutate: clearDetails, isPending: isClearing } = useClearRequestDetails()
+
+  useEffect(() => {
+    window.localStorage.setItem(RETENTION_STORAGE_KEY, String(retentionDays))
+  }, [retentionDays])
+
+  useEffect(() => {
+    const days = kvCacheConfig?.requestDetailsRetentionDays
+    if (days === 1 || days === 3 || days === 10 || days === 30) {
+      setRetentionDays(days)
+    }
+  }, [kvCacheConfig?.requestDetailsRetentionDays])
+
+  const handleRetentionDaysChange = (days: RetentionDays) => {
+    setRetentionDays(days)
+    setKvCacheConfig({ requestDetailsRetentionDays: days })
+  }
 
   useEffect(() => {
     if (!autoRefresh) return
@@ -168,6 +195,17 @@ export function RequestDetailsPanel() {
                 <option key={n} value={n}>{n} 条</option>
               ))}
             </select>
+            <select
+              value={retentionDays}
+              onChange={(event) => handleRetentionDaysChange(Number(event.target.value) as RetentionDays)}
+              className={`${controlClass} w-24`}
+              aria-label="日志保留天数"
+              title="保存多少天"
+            >
+              {[1, 3, 10, 30].map(n => (
+                <option key={n} value={n}>{n} 天</option>
+              ))}
+            </select>
             <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isLoading} className="h-8 px-3 text-xs">
               <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
               刷新
@@ -232,8 +270,13 @@ export function RequestDetailsPanel() {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{r.endpoint.replace('/v1/', '')}</td>
-                    <td className="px-3 py-2">
-                      <span className={`font-medium ${modelColor(r.model)}`}>{modelShortName(r.model)}</span>
+                    <td className="max-w-[260px] px-3 py-2">
+                      <span
+                        className={`block truncate font-medium ${modelColor(r.model)}`}
+                        title={r.model || '-'}
+                      >
+                        {r.model || '-'}
+                      </span>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(r.inputTokens)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">

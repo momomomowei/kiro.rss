@@ -19,10 +19,35 @@ interface DashboardProps {
 
 type CredentialViewMode = 'card' | 'list'
 const VIEW_MODE_STORAGE_KEY = 'kiro-admin-credential-view-mode'
+const BALANCE_STORAGE_KEY = 'kiro-admin-credential-balances'
 
 function readCredentialViewMode(): CredentialViewMode {
   if (typeof window === 'undefined') return 'card'
   return window.localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'list' ? 'list' : 'card'
+}
+
+function readBalanceMap(): Map<number, BalanceResponse> {
+  if (typeof window === 'undefined') return new Map()
+  try {
+    const raw = window.localStorage.getItem(BALANCE_STORAGE_KEY)
+    if (!raw) return new Map()
+    const parsed = JSON.parse(raw) as Record<string, BalanceResponse>
+    return new Map(
+      Object.entries(parsed)
+        .map(([id, balance]) => [Number(id), balance] as const)
+        .filter(([id, balance]) => Number.isFinite(id) && Boolean(balance))
+    )
+  } catch {
+    return new Map()
+  }
+}
+
+function saveBalanceMap(map: Map<number, BalanceResponse>) {
+  if (typeof window === 'undefined') return
+  const data = Object.fromEntries(
+    Array.from(map.entries()).map(([id, balance]) => [String(id), balance])
+  )
+  window.localStorage.setItem(BALANCE_STORAGE_KEY, JSON.stringify(data))
 }
 
 export function Dashboard({ onLogout }: DashboardProps) {
@@ -32,7 +57,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
   const [verifyResults, setVerifyResults] = useState<Map<number, VerifyResult>>(new Map())
-  const [balanceMap, setBalanceMap] = useState<Map<number, BalanceResponse>>(new Map())
+  const [balanceMap, setBalanceMap] = useState<Map<number, BalanceResponse>>(readBalanceMap)
   const [loadingBalanceIds, setLoadingBalanceIds] = useState<Set<number>>(new Set())
   const [queryingInfo, setQueryingInfo] = useState(false)
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
@@ -88,7 +113,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
   // 只保留当前仍存在的凭据缓存，避免删除后残留旧数据
   useEffect(() => {
     if (!data?.credentials) {
-      setBalanceMap(new Map())
       setLoadingBalanceIds(new Set())
       return
     }
@@ -111,7 +135,11 @@ export function Dashboard({ onLogout }: DashboardProps) {
           changed = true
         }
       })
-      return changed ? next : prev
+      if (changed) {
+        saveBalanceMap(next)
+        return next
+      }
+      return prev
     })
 
     setLoadingBalanceIds(prev => {
@@ -127,34 +155,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
       return next.size === prev.size ? prev : next
     })
   }, [data?.credentials])
-
-  const handleViewBalance = async (id: number) => {
-    setLoadingBalanceIds(prev => {
-      const next = new Set(prev)
-      next.add(id)
-      return next
-    })
-
-    try {
-      const balance = await getCredentialBalance(id, true)
-      setBalanceMap(prev => {
-        const next = new Map(prev)
-        next.set(id, balance)
-        return next
-      })
-      if (balance.remaining <= 0 || balance.usagePercentage >= 100) {
-        queryClient.invalidateQueries({ queryKey: ['credentials'] })
-      }
-    } catch (error) {
-      toast.error('查询余额失败: ' + extractErrorMessage(error))
-    } finally {
-      setLoadingBalanceIds(prev => {
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-    }
-  }
 
   const handleLogout = () => onLogout()
 
@@ -366,6 +366,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
         setBalanceMap(prev => {
           const next = new Map(prev)
           next.set(id, balance)
+          saveBalanceMap(next)
           return next
         })
       } catch (error) {
@@ -691,7 +692,6 @@ export function Dashboard({ onLogout }: DashboardProps) {
                   <CredentialCard
                     key={credential.id}
                     credential={credential}
-                    onViewBalance={handleViewBalance}
                     selected={selectedIds.has(credential.id)}
                     onToggleSelect={() => toggleSelect(credential.id)}
                     balance={balanceMap.get(credential.id) || credential.balance || null}

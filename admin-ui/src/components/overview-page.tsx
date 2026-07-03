@@ -104,7 +104,7 @@ export function OverviewPage() {
     let inputTokens = summary?.inputTokens ?? 0
     let outputTokens = summary?.outputTokens ?? 0
     let cachedTokens = summary?.cachedTokens ?? 0
-    let credits = summary?.creditsUsed ?? 0
+    let credits = 0
     let cacheHitCount = summary?.cacheHitCount ?? 0
     const byModel = new Map<string, { calls: number; in: number; out: number }>()
 
@@ -113,9 +113,9 @@ export function OverviewPage() {
         inputTokens += r.inputTokens
         outputTokens += r.outputTokens
         cachedTokens += r.cachedTokens
-        credits += r.creditsUsed
         if (r.cacheHit) cacheHitCount += 1
       }
+      credits += r.costUsd
 
       const m = byModel.get(r.model) ?? { calls: 0, in: 0, out: 0 }
       m.calls += 1

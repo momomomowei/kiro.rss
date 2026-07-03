@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import * as Tooltip from '@radix-ui/react-tooltip'
-import { RefreshCw, ChevronUp, ChevronDown, Wallet, Trash2, Loader2, Pencil, Zap, ZapOff, ListChecks, Database } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Trash2, Loader2, Pencil, Zap, ZapOff, ListChecks, Database } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -31,7 +31,6 @@ import {
 
 interface CredentialCardProps {
   credential: CredentialStatusItem
-  onViewBalance: (id: number) => void
   selected: boolean
   onToggleSelect: () => void
   balance: BalanceResponse | null
@@ -102,7 +101,6 @@ function formatProxyDisplay(proxyUrl?: string): string {
 
 export function CredentialCard({
   credential,
-  onViewBalance,
   selected,
   onToggleSelect,
   balance,
@@ -600,17 +598,8 @@ export function CredentialCard({
                 </div>
               </div>
             ) : (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-[13px] text-muted-foreground">
-                <span>余额未查询</span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-8"
-                  onClick={() => onViewBalance(credential.id)}
-                >
-                  <Wallet className="h-3.5 w-3.5" />
-                  查看余额
-                </Button>
+              <div className="flex flex-1 items-center justify-center text-center text-[13px] text-muted-foreground">
+                余额未查询，点击顶部“刷新额度”即可加载。
               </div>
             )}
           </div>

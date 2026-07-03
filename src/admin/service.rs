@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,8 @@ const BALANCE_CACHE_TTL_SECS: i64 = 300;
 const REQUEST_DETAILS_DEFAULT_LIMIT: usize = 100;
 /// 请求明细最大返回条数
 const REQUEST_DETAILS_MAX_LIMIT: usize = 1000;
+/// 请求明细默认保留天数
+const REQUEST_DETAILS_DEFAULT_RETENTION_DAYS: i64 = 1;
 /// 模拟 KV 缓存记录文件名
 const KV_CACHE_RECORDS_FILE: &str = "kiro_kv_cache_records.jsonl";
 const PROXY_POOL_FILE: &str = "kiro_proxy_pool.json";
@@ -384,10 +386,13 @@ impl AdminService {
 
     /// 获取 KV 缓存配置
     pub fn get_kv_cache_config(&self) -> KvCacheConfigResponse {
-        use crate::anthropic::kv_cache::{get_cache_read_efficiency, get_kv_cache_ttl_secs};
+        use crate::anthropic::kv_cache::{
+            get_cache_read_efficiency, get_kv_cache_ttl_secs, get_records_retention_days,
+        };
         KvCacheConfigResponse {
             cache_read_efficiency: get_cache_read_efficiency(),
             kv_cache_ttl_secs: get_kv_cache_ttl_secs(),
+            request_details_retention_days: get_records_retention_days(),
         }
     }
 
@@ -396,7 +401,7 @@ impl AdminService {
         &self,
         req: SetKvCacheConfigRequest,
     ) -> Result<KvCacheConfigResponse, AdminServiceError> {
-        use crate::anthropic::kv_cache::set_kv_cache_config;
+        use crate::anthropic::kv_cache::{set_kv_cache_config, set_records_retention_days};
         use crate::model::config::Config;
 
         let config_path = self
@@ -416,6 +421,9 @@ impl AdminService {
         if let Some(ttl) = req.kv_cache_ttl_secs {
             config.kv_cache_ttl_secs = ttl.max(60);
         }
+        if let Some(days) = req.request_details_retention_days {
+            config.request_details_retention_days = Self::normalize_request_details_retention_days(days);
+        }
 
         config
             .save()
@@ -423,10 +431,12 @@ impl AdminService {
 
         // 更新运行时全局配置
         set_kv_cache_config(config.cache_read_efficiency, config.kv_cache_ttl_secs);
+        set_records_retention_days(config.request_details_retention_days);
 
         Ok(KvCacheConfigResponse {
             cache_read_efficiency: config.cache_read_efficiency,
             kv_cache_ttl_secs: config.kv_cache_ttl_secs,
+            request_details_retention_days: config.request_details_retention_days,
         })
     }
 
@@ -621,10 +631,15 @@ impl AdminService {
     pub fn get_request_details(
         &self,
         limit: Option<usize>,
+        retention_days: Option<i64>,
     ) -> Result<RequestDetailsResponse, AdminServiceError> {
         let limit = limit
             .unwrap_or(REQUEST_DETAILS_DEFAULT_LIMIT)
             .clamp(1, REQUEST_DETAILS_MAX_LIMIT);
+        let retention_days = Self::normalize_request_details_retention_days(
+            retention_days.unwrap_or(REQUEST_DETAILS_DEFAULT_RETENTION_DAYS),
+        );
+        let cutoff = Utc::now() - Duration::days(retention_days);
 
         let file = match File::open(&self.request_details_path) {
             Ok(file) => file,
@@ -645,6 +660,8 @@ impl AdminService {
 
         let reader = BufReader::new(file);
         let mut rows = Vec::new();
+        let mut retained_lines = Vec::new();
+        let mut should_rewrite = false;
 
         for (line_no, line) in reader.lines().enumerate() {
             let line = match line {
@@ -665,8 +682,13 @@ impl AdminService {
             for item in stream {
                 match item {
                     Ok(row) => {
-                        rows.push(row);
                         parsed = true;
+                        if Self::request_detail_is_retained(&row, cutoff) {
+                            retained_lines.push(line.to_string());
+                            rows.push(row);
+                        } else {
+                            should_rewrite = true;
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("解析请求明细第 {} 行失败: {}", line_no + 1, e);
@@ -678,6 +700,10 @@ impl AdminService {
             if !parsed && !had_error {
                 tracing::warn!("解析请求明细第 {} 行失败: 空或无效 JSON", line_no + 1);
             }
+        }
+
+        if should_rewrite {
+            self.rewrite_request_details(&retained_lines)?;
         }
 
         let mut mapped = rows
@@ -692,6 +718,33 @@ impl AdminService {
             total,
             summary,
             records,
+        })
+    }
+
+    fn request_detail_is_retained(row: &KvCacheRecordRow, cutoff: DateTime<Utc>) -> bool {
+        DateTime::parse_from_rfc3339(&row.recorded_at)
+            .map(|recorded_at| recorded_at.with_timezone(&Utc) >= cutoff)
+            .unwrap_or(true)
+    }
+
+    fn normalize_request_details_retention_days(days: i64) -> i64 {
+        match days {
+            1 | 3 | 10 | 30 => days,
+            _ => REQUEST_DETAILS_DEFAULT_RETENTION_DAYS,
+        }
+    }
+
+    fn rewrite_request_details(&self, lines: &[String]) -> Result<(), AdminServiceError> {
+        let content = if lines.is_empty() {
+            String::new()
+        } else {
+            let mut content = lines.join("\n");
+            content.push('\n');
+            content
+        };
+
+        std::fs::write(&self.request_details_path, content).map_err(|e| {
+            AdminServiceError::InternalError(format!("裁剪请求明细文件失败: {}", e))
         })
     }
 

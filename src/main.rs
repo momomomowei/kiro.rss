@@ -159,6 +159,7 @@ async fn main() {
 
     // 构建 Anthropic API 路由（profile_arn 由 provider 层根据实际凭据动态注入）
     anthropic::kv_cache::set_kv_cache_config(config.cache_read_efficiency, config.kv_cache_ttl_secs);
+    anthropic::kv_cache::set_records_retention_days(config.request_details_retention_days);
     if let Some(dir) = token_manager.cache_dir() {
         anthropic::kv_cache::set_records_dir(dir);
     }
