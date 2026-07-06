@@ -96,6 +96,8 @@ pub fn map_model(model: &str) -> Option<String> {
             Some("claude-sonnet-5".to_string())
         } else if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-sonnet-4.6".to_string())
+        } else if model_lower.contains("4-5") || model_lower.contains("4.5") {
+            Some("claude-sonnet-4.5".to_string())
         } else if model_lower.contains("4") {
             Some("claude-sonnet-4".to_string())
         } else {

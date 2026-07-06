@@ -140,8 +140,9 @@ struct BillingHeaderRectifyResult {
 
 fn is_billing_header_line(text: &str) -> bool {
     let trimmed = text.trim_start();
-    trimmed.len() >= BILLING_HEADER_PREFIX.len()
-        && trimmed[..BILLING_HEADER_PREFIX.len()].eq_ignore_ascii_case(BILLING_HEADER_PREFIX)
+    trimmed
+        .get(..BILLING_HEADER_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(BILLING_HEADER_PREFIX))
 }
 
 fn rectify_billing_header(system: &mut Option<Vec<SystemMessage>>) -> BillingHeaderRectifyResult {
@@ -2162,6 +2163,7 @@ mod tests {
         assert!(!is_billing_header_line(
             "prefix x-anthropic-billing-header: cc_version=2.1.36;"
         ));
+        assert!(!is_billing_header_line("【记忆档案·核心层】\n## 关于我"));
     }
 
     #[test]

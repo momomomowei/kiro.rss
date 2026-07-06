@@ -18,6 +18,12 @@ use kiro::token_manager::MultiTokenManager;
 use model::arg::Args;
 use model::config::Config;
 
+fn mask_for_log(value: &str) -> String {
+    let prefix_len = value.chars().count() / 2;
+    let prefix: String = value.chars().take(prefix_len).collect();
+    format!("{prefix}***")
+}
+
 #[tokio::main]
 async fn main() {
     // 解析命令行参数
@@ -209,7 +215,7 @@ async fn main() {
     // 启动服务器
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("启动 Anthropic API 端点: {}", addr);
-    tracing::info!("API Key: {}***", &api_key[..(api_key.len() / 2)]);
+    tracing::info!("API Key: {}", mask_for_log(&api_key));
     tracing::info!("可用 API:");
     tracing::info!("  GET  /v1/models");
     tracing::info!("  POST /v1/messages");
@@ -227,4 +233,14 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_for_log;
+
+    #[test]
+    fn mask_for_log_handles_multibyte_text() {
+        assert_eq!(mask_for_log("密钥🔑abcd"), "密钥🔑***");
+    }
 }
