@@ -17,6 +17,10 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tokio::time::interval;
 use uuid::Uuid;
@@ -707,10 +711,13 @@ async fn handle_stream_request(
     tool_name_map: HashMap<String, String>,
     context_window: i32,
 ) -> Response {
+    let request_abort_recorder =
+        StreamAbortRecorder::handler(endpoint, model.to_string(), true, input_tokens);
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
+            request_abort_recorder.complete();
             return map_provider_error(provider.as_ref(), endpoint, model, request_body, true, input_tokens, e);
         }
     };
@@ -740,6 +747,7 @@ async fn handle_stream_request(
         credential_name,
         special_settings,
     );
+    request_abort_recorder.complete();
 
     // 返回 SSE 响应
     Response::builder()
@@ -759,6 +767,86 @@ fn create_ping_sse() -> Bytes {
     Bytes::from("event: ping\ndata: {\"type\": \"ping\"}\n\n")
 }
 
+struct StreamAbortState {
+    completed: AtomicBool,
+    endpoint: &'static str,
+    model: String,
+    credential_id: u64,
+    credential_name: Option<String>,
+    stream: bool,
+    input_tokens: i32,
+    message: &'static str,
+}
+
+#[derive(Clone)]
+struct StreamAbortRecorder {
+    state: Arc<StreamAbortState>,
+}
+
+impl StreamAbortRecorder {
+    fn new(
+        endpoint: &'static str,
+        model: String,
+        credential_id: u64,
+        credential_name: Option<String>,
+        input_tokens: i32,
+    ) -> Self {
+        Self {
+            state: Arc::new(StreamAbortState {
+                completed: AtomicBool::new(false),
+                endpoint,
+                model,
+                credential_id,
+                credential_name,
+                stream: true,
+                input_tokens,
+                message: "请求流未正常结束（客户端连接中断或服务端提前关闭连接）",
+            }),
+        }
+    }
+
+    fn handler(
+        endpoint: &'static str,
+        model: String,
+        stream: bool,
+        input_tokens: i32,
+    ) -> Self {
+        Self {
+            state: Arc::new(StreamAbortState {
+                completed: AtomicBool::new(false),
+                endpoint,
+                model,
+                credential_id: 0,
+                credential_name: None,
+                stream,
+                input_tokens,
+                message: "请求处理未正常完成（客户端连接中断或服务端提前关闭连接）",
+            }),
+        }
+    }
+
+    fn complete(&self) {
+        self.state.completed.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for StreamAbortRecorder {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.state) == 1 && !self.state.completed.load(Ordering::Relaxed) {
+            record_request_error_with_credential(
+                None,
+                self.state.endpoint,
+                &self.state.model,
+                self.state.credential_id,
+                self.state.credential_name.clone(),
+                self.state.stream,
+                self.state.input_tokens,
+                self.state.message,
+            );
+        }
+    }
+}
+
 /// 创建 SSE 事件流
 fn create_sse_stream(
     response: reqwest::Response,
@@ -773,6 +861,13 @@ fn create_sse_stream(
     credential_name: Option<String>,
     special_settings: Vec<String>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
+    let abort_recorder = StreamAbortRecorder::new(
+        endpoint,
+        model.clone(),
+        credential_id,
+        credential_name.clone(),
+        ctx.input_tokens,
+    );
     // 先发送初始事件
     let initial_stream = stream::iter(
         initial_events
@@ -800,6 +895,7 @@ fn create_sse_stream(
             credential_id,
             credential_name,
             special_settings,
+            abort_recorder,
         ),
         |(
             mut body_stream,
@@ -817,6 +913,7 @@ fn create_sse_stream(
             credential_id,
             credential_name,
             special_settings,
+            abort_recorder,
         )| async move {
             if finished {
                 return None;
@@ -914,6 +1011,7 @@ fn create_sse_stream(
                                     credential_id,
                                     credential_name,
                                     special_settings,
+                                    abort_recorder,
                                 ),
                             ))
                         }
@@ -921,6 +1019,7 @@ fn create_sse_stream(
                             tracing::error!("读取响应流失败: {}", e);
                             let (_, final_output_tokens) = ctx.final_usage_tokens();
                             let estimated_input_tokens = ctx.input_tokens;
+                            abort_recorder.complete();
                             let kv = record_simulated_kv_cache(
                                 None,
                                 KvCacheRecordInput {
@@ -968,12 +1067,14 @@ fn create_sse_stream(
                                     credential_id,
                                     credential_name,
                                     special_settings,
+                                    abort_recorder,
                                 ),
                             ))
                         }
                         None => {
                             let (_, final_output_tokens) = ctx.final_usage_tokens();
                             let estimated_input_tokens = ctx.input_tokens;
+                            abort_recorder.complete();
                             let kv = record_simulated_kv_cache(
                                 None,
                                 KvCacheRecordInput {
@@ -1021,6 +1122,7 @@ fn create_sse_stream(
                                     credential_id,
                                     credential_name,
                                     special_settings,
+                                    abort_recorder,
                                 ),
                             ))
                         }
@@ -1048,6 +1150,7 @@ fn create_sse_stream(
                             credential_id,
                             credential_name,
                             special_settings,
+                            abort_recorder,
                         ),
                     ))
                 }
@@ -1077,10 +1180,13 @@ async fn handle_non_stream_request(
     extract_thinking: bool,
     context_window: i32,
 ) -> Response {
+    let request_abort_recorder =
+        StreamAbortRecorder::handler(endpoint, model.to_string(), false, input_tokens);
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
+            request_abort_recorder.complete();
             return map_provider_error(provider.as_ref(), endpoint, model, request_body, false, input_tokens, e);
         }
     };
@@ -1104,6 +1210,7 @@ async fn handle_non_stream_request(
                 input_tokens,
                 &e.to_string(),
             );
+            request_abort_recorder.complete();
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse::new(
@@ -1325,6 +1432,7 @@ async fn handle_non_stream_request(
             special_settings,
         },
     );
+    request_abort_recorder.complete();
     // 如果对外 input_tokens 使用了 contextUsageEvent（/cc/v1/messages），则按比例缩放 cache tokens，
     // 让 usage 字段在同一 token 口径下更一致（同时保持“<1k 不做缓存”的估算口径）。
     let estimated_non_cache_input_tokens = non_cache_input_tokens(
@@ -1625,10 +1733,13 @@ async fn handle_stream_request_buffered(
     tool_name_map: HashMap<String, String>,
     context_window: i32,
 ) -> Response {
+    let request_abort_recorder =
+        StreamAbortRecorder::handler(endpoint, model.to_string(), true, estimated_input_tokens);
     // 调用 Kiro API（支持多凭据故障转移）
     let api_response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
+            request_abort_recorder.complete();
             return map_provider_error(provider.as_ref(), endpoint, model, request_body, true, estimated_input_tokens, e);
         }
     };
@@ -1654,6 +1765,7 @@ async fn handle_stream_request_buffered(
         credential_name,
         special_settings,
     );
+    request_abort_recorder.complete();
 
     // 返回 SSE 响应
     Response::builder()
@@ -1678,6 +1790,13 @@ fn create_buffered_sse_stream(
     credential_name: Option<String>,
     special_settings: Vec<String>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
+    let abort_recorder = StreamAbortRecorder::new(
+        endpoint,
+        model.clone(),
+        credential_id,
+        credential_name.clone(),
+        ctx.estimated_input_tokens(),
+    );
     let body_stream = response.bytes_stream();
 
     stream::unfold(
@@ -1697,6 +1816,7 @@ fn create_buffered_sse_stream(
             credential_id,
             credential_name,
             special_settings,
+            abort_recorder,
         ),
         |(
             mut body_stream,
@@ -1714,6 +1834,7 @@ fn create_buffered_sse_stream(
             credential_id,
             credential_name,
             special_settings,
+            abort_recorder,
         )| async move {
             if finished {
                 return None;
@@ -1744,6 +1865,7 @@ fn create_buffered_sse_stream(
                                     credential_id,
                                     credential_name,
                                     special_settings,
+                                    abort_recorder,
                                 ),
                             ));
                         }
@@ -1816,6 +1938,7 @@ fn create_buffered_sse_stream(
                                 let (final_total_input_tokens, final_output_tokens) =
                                     ctx.final_usage_tokens();
                                 let estimated_input_tokens = ctx.estimated_input_tokens();
+                                abort_recorder.complete();
                                 let kv = record_simulated_kv_cache(
                                     None,
                                     KvCacheRecordInput {
@@ -1875,6 +1998,7 @@ fn create_buffered_sse_stream(
                                         credential_id,
                                         credential_name,
                                         special_settings,
+                                        abort_recorder,
                                     ),
                                 ));
                             }
@@ -1882,6 +2006,7 @@ fn create_buffered_sse_stream(
                                 let (final_total_input_tokens, final_output_tokens) =
                                     ctx.final_usage_tokens();
                                 let estimated_input_tokens = ctx.estimated_input_tokens();
+                                abort_recorder.complete();
                                 let kv = record_simulated_kv_cache(
                                     None,
                                     KvCacheRecordInput {
@@ -1941,6 +2066,7 @@ fn create_buffered_sse_stream(
                                         credential_id,
                                         credential_name,
                                         special_settings,
+                                        abort_recorder,
                                     ),
                                 ));
                             }
