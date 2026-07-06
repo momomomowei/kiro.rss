@@ -30,6 +30,8 @@ pub struct CredentialStatusItem {
     pub disabled: bool,
     /// 连续失败次数
     pub failure_count: u32,
+    /// 累计失败次数
+    pub total_failure_count: u64,
     /// 是否为当前活跃凭据
     pub is_current: bool,
     /// Token 过期时间（RFC3339 格式）
@@ -261,6 +263,8 @@ pub struct RequestDetailsSummary {
     pub credits_used: f64,
     /// 命中缓存的请求数
     pub cache_hit_count: usize,
+    /// 错误请求数
+    pub error_count: usize,
 }
 
 /// 单次请求明细
@@ -277,8 +281,15 @@ pub struct RequestDetailItem {
     pub model: String,
     /// 凭据 ID（可能为 0，新版已移除该字段）
     pub credential_id: u64,
+    /// 凭据显示名（优先邮箱）
+    pub credential_name: Option<String>,
     /// 是否流式
     pub stream: bool,
+    /// 是否错误记录
+    pub is_error: bool,
+    /// 错误信息
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
     /// 是否命中缓存
     pub cache_hit: bool,
     /// 输入 tokens（不包含缓存读取和缓存创建）

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import * as Tooltip from '@radix-ui/react-tooltip'
-import { RefreshCw, ChevronUp, ChevronDown, Trash2, Loader2, Pencil, Zap, ZapOff, ListChecks, Database } from 'lucide-react'
+import { RefreshCw, ChevronUp, ChevronDown, Trash2, Loader2, Pencil, ListChecks, Database } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -35,6 +35,7 @@ interface CredentialCardProps {
   onToggleSelect: () => void
   balance: BalanceResponse | null
   loadingBalance: boolean
+  onRefreshBalance: (id: number) => void
   view?: 'card' | 'list'
 }
 
@@ -105,8 +106,11 @@ export function CredentialCard({
   onToggleSelect,
   balance,
   loadingBalance,
+  onRefreshBalance,
   view = 'card',
 }: CredentialCardProps) {
+  const totalFailureCount = credential.totalFailureCount ?? credential.failureCount
+
   const [editingPriority, setEditingPriority] = useState(false)
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -312,7 +316,7 @@ export function CredentialCard({
                 </button>
               )}
             </div>
-            <Metric label="失败" value={credential.failureCount} danger={credential.failureCount > 0} />
+            <Metric label="失败" value={totalFailureCount} danger={totalFailureCount > 0} />
             <Metric label="刷新失败" value={credential.refreshFailureCount} danger={credential.refreshFailureCount > 0} />
             <Metric label="成功" value={credential.successCount} />
           </div>
@@ -370,6 +374,17 @@ export function CredentialCard({
                 disabled={forceRefresh.isPending || credential.disabled}
               >
                 <RefreshCw className={`h-4 w-4 ${forceRefresh.isPending ? 'animate-spin' : ''}`} />
+              </Button>
+            </IconTooltip>
+            <IconTooltip label={credential.disabled ? '已禁用，无法刷新额度' : '刷新本账号额度'}>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8"
+                onClick={() => onRefreshBalance(credential.id)}
+                disabled={loadingBalance || credential.disabled}
+              >
+                <RefreshCw className={`h-4 w-4 ${loadingBalance ? 'animate-spin' : ''}`} />
               </Button>
             </IconTooltip>
             <IconTooltip label="查看可用模型">
@@ -500,8 +515,8 @@ export function CredentialCard({
             </div>
             <InfoRow
               label="失败次数"
-              value={credential.failureCount}
-              danger={credential.failureCount > 0}
+              value={totalFailureCount}
+              danger={totalFailureCount > 0}
             />
             <InfoRow
               label="刷新失败"
@@ -541,28 +556,20 @@ export function CredentialCard({
                 <div className="flex min-w-0 items-end justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                      已用
+                      余额
                     </div>
                     <div
                       className={`mt-1 text-2xl font-semibold tabular-nums ${
                         credential.disabled
                           ? 'text-muted-foreground'
-                          : balance.usagePercentage >= 100
+                          : balance.remaining <= 0
                           ? 'text-red-600 dark:text-red-400'
-                          : balance.usagePercentage >= 80
-                            ? 'text-amber-600 dark:text-amber-400'
-                            : 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-emerald-600 dark:text-emerald-400'
                       }`}
                     >
-                      ${formatMoney(balance.currentUsage)}
-                    </div>
-                  </div>
-                  <div className="min-w-0 shrink-0 text-right">
-                    <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                      超额
-                    </div>
-                    <div className="mt-1">
-                      <OveragePill enabled={balance.overageStatus === 'ENABLED'} />
+                      {balance.remaining < 0
+                        ? `-$${formatMoney(Math.abs(balance.remaining))}`
+                        : `$${formatMoney(balance.remaining)}`}
                     </div>
                   </div>
                 </div>
@@ -573,9 +580,7 @@ export function CredentialCard({
                   />
                   <div className="grid grid-cols-3 gap-1 text-[11px] tabular-nums text-muted-foreground">
                     <span className="min-w-0 truncate">
-                      {balance.remaining < 0
-                        ? `超额 $${formatMoney(Math.abs(balance.remaining))}`
-                        : `剩余 $${formatMoney(balance.remaining)}`}
+                      已用 ${formatMoney(balance.currentUsage)}
                     </span>
                     <span className="text-center">
                       {balance.usagePercentage.toFixed(1)}%
@@ -659,6 +664,17 @@ export function CredentialCard({
                 </Button>
               </IconTooltip>
               <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                <IconTooltip label={credential.disabled ? '已禁用，无法刷新额度' : '刷新本账号额度'}>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => onRefreshBalance(credential.id)}
+                    disabled={loadingBalance || credential.disabled}
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${loadingBalance ? 'animate-spin' : ''}`} />
+                  </Button>
+                </IconTooltip>
                 <IconTooltip label="查看可用模型">
                   <Button
                     size="icon"
@@ -790,20 +806,5 @@ function IconTooltip({ label, children }: { label: string; children: ReactNode }
         </Tooltip.Portal>
       </Tooltip.Root>
     </Tooltip.Provider>
-  )
-}
-
-function OveragePill({ enabled }: { enabled: boolean }) {
-  return (
-    <span
-      className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11px] font-medium ${
-        enabled
-          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-          : 'border border-amber-500/40 text-amber-600 dark:text-amber-400'
-      }`}
-    >
-      {enabled ? <Zap className="h-3 w-3" /> : <ZapOff className="h-3 w-3" />}
-      {enabled ? '超额' : '未开'}
-    </span>
   )
 }

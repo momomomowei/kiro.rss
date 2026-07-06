@@ -16,6 +16,15 @@ function formatNumber(n: number): string {
   return n.toLocaleString('zh-CN')
 }
 
+function formatTokenK(n: number): string {
+  const value = n / 1000
+  const digits = value >= 100 ? 0 : 1
+  return `${value.toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  })}K`
+}
+
 function StatCard({
   icon,
   label,
@@ -76,7 +85,9 @@ export function OverviewPage() {
     const available = list.filter((c) => !c.disabled).length
     const disabled = total - available
     const successCount = list.reduce((s, c) => s + (c.successCount || 0), 0)
-    const failureCount = list.reduce((s, c) => s + (c.failureCount || 0), 0)
+    const failureCount = list.reduce((s, c) => s + (c.totalFailureCount ?? c.failureCount ?? 0), 0)
+    const creditsUsed = list.reduce((s, c) => s + (c.balance?.currentUsage ?? 0), 0)
+    const balanceCount = list.filter((c) => Boolean(c.balance)).length
     const totalAttempts = successCount + failureCount
     const successRate = totalAttempts > 0 ? (successCount / totalAttempts) * 100 : 100
 
@@ -92,6 +103,8 @@ export function OverviewPage() {
       disabled,
       successCount,
       failureCount,
+      creditsUsed,
+      balanceCount,
       successRate,
       credLeaderboard,
     }
@@ -104,7 +117,6 @@ export function OverviewPage() {
     let inputTokens = summary?.inputTokens ?? 0
     let outputTokens = summary?.outputTokens ?? 0
     let cachedTokens = summary?.cachedTokens ?? 0
-    let credits = 0
     let cacheHitCount = summary?.cacheHitCount ?? 0
     const byModel = new Map<string, { calls: number; in: number; out: number }>()
 
@@ -115,8 +127,6 @@ export function OverviewPage() {
         cachedTokens += r.cachedTokens
         if (r.cacheHit) cacheHitCount += 1
       }
-      credits += r.costUsd
-
       const m = byModel.get(r.model) ?? { calls: 0, in: 0, out: 0 }
       m.calls += 1
       m.in += r.inputTokens
@@ -137,7 +147,6 @@ export function OverviewPage() {
       inputTokens,
       outputTokens,
       cachedTokens,
-      credits,
       cacheHitRate,
       cachedRatio,
       modelList,
@@ -175,22 +184,23 @@ export function OverviewPage() {
         <StatCard
           icon={<Cpu className="h-4 w-4" />}
           label="输入 Token"
-          value={formatNumber(reqStats.inputTokens)}
+          value={formatTokenK(reqStats.inputTokens)}
           hint={
             hasRequestData ? (
-              <span>缓存 {formatNumber(reqStats.cachedTokens)}</span>
+              <span>缓存 {formatTokenK(reqStats.cachedTokens)}</span>
             ) : null
           }
         />
         <StatCard
           icon={<Cpu className="h-4 w-4" />}
           label="输出 Token"
-          value={formatNumber(reqStats.outputTokens)}
+          value={formatTokenK(reqStats.outputTokens)}
         />
         <StatCard
           icon={<Database className="h-4 w-4" />}
           label="Credits 消耗"
-          value={reqStats.credits.toFixed(2)}
+          value={credStats.creditsUsed.toFixed(2)}
+          hint={credStats.balanceCount > 0 ? <span>{credStats.balanceCount} 个已查</span> : null}
         />
         <StatCard
           icon={<KeyRound className="h-4 w-4" />}
@@ -383,9 +393,9 @@ export function OverviewPage() {
                         <span className="truncate font-medium">{label}</span>
                         <span className="text-muted-foreground tabular-nums">
                           成功 {formatNumber(success)}
-                          {c.failureCount > 0 && (
+                          {(c.totalFailureCount ?? c.failureCount ?? 0) > 0 && (
                             <span className="ml-1 text-rose-500">
-                              · 失败 {formatNumber(c.failureCount)}
+                              · 失败 {formatNumber(c.totalFailureCount ?? c.failureCount ?? 0)}
                             </span>
                           )}
                         </span>

@@ -12,6 +12,7 @@ export interface CredentialStatusItem {
   priority: number
   disabled: boolean
   failureCount: number
+  totalFailureCount?: number
   isCurrent: boolean
   expiresAt: string | null
   authMethod: string | null
@@ -190,6 +191,7 @@ export interface RequestDetailsSummary {
   outputTokens: number
   creditsUsed: number
   cacheHitCount: number
+  errorCount?: number
 }
 
 // 单次请求明细
@@ -199,7 +201,10 @@ export interface RequestDetailItem {
   endpoint: string
   model: string
   credentialId: number
+  credentialName?: string | null
   stream: boolean
+  isError?: boolean
+  errorMessage?: string
   cacheHit: boolean
   inputTokens: number
   cachedTokens: number

@@ -46,6 +46,8 @@ const MAX_ENTRIES_PER_NAMESPACE: usize = 128;
 pub struct KvCacheRecordInput {
     pub endpoint: &'static str,
     pub model: String,
+    pub credential_id: u64,
+    pub credential_name: Option<String>,
     pub stream: bool,
     /// 归一化后的 prompt block hash 列表（system/tools/messages）
     pub prompt_hashes: Vec<String>,
@@ -54,6 +56,8 @@ pub struct KvCacheRecordInput {
     pub input_tokens: i32,
     pub output_tokens: i32,
     pub credits_used: f64,
+    pub is_error: bool,
+    pub error_message: Option<String>,
     /// 本次请求触发的特殊设置（用于审计）
     pub special_settings: Vec<String>,
 }
@@ -156,8 +160,16 @@ struct KvCacheRecord {
     request_id: String,
     endpoint: String,
     model: String,
+    #[serde(default)]
+    credential_id: u64,
+    #[serde(default)]
+    credential_name: Option<String>,
     stream: bool,
     cache_key: String,
+    #[serde(default)]
+    is_error: bool,
+    #[serde(default)]
+    error_message: Option<String>,
     cache_hit: bool,
     cache_creation_input_tokens: i32,
     cache_read_input_tokens: i32,
@@ -458,8 +470,12 @@ fn record_impl(
         request_id: Uuid::new_v4().to_string(),
         endpoint: input.endpoint.to_string(),
         model: input.model,
+        credential_id: input.credential_id,
+        credential_name: input.credential_name,
         stream: input.stream,
         cache_key: cache_key.clone(),
+        is_error: input.is_error,
+        error_message: input.error_message,
         cache_hit,
         cache_creation_input_tokens,
         cache_read_input_tokens,
@@ -478,6 +494,61 @@ fn record_impl(
         cache_creation_input_tokens,
         cache_read_input_tokens,
     })
+}
+
+pub fn record_request_error(
+    dir_hint: Option<PathBuf>,
+    endpoint: &'static str,
+    model: &str,
+    stream: bool,
+    input_tokens: i32,
+    error_message: &str,
+) {
+    record_request_error_with_credential(
+        dir_hint,
+        endpoint,
+        model,
+        0,
+        None,
+        stream,
+        input_tokens,
+        error_message,
+    );
+}
+
+pub fn record_request_error_with_credential(
+    dir_hint: Option<PathBuf>,
+    endpoint: &'static str,
+    model: &str,
+    credential_id: u64,
+    credential_name: Option<String>,
+    stream: bool,
+    input_tokens: i32,
+    error_message: &str,
+) {
+    let records_path = records_file_path(dir_hint);
+    let record = KvCacheRecord {
+        recorded_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        request_id: Uuid::new_v4().to_string(),
+        endpoint: endpoint.to_string(),
+        model: model.to_string(),
+        credential_id,
+        credential_name,
+        stream,
+        cache_key: String::new(),
+        is_error: true,
+        error_message: Some(error_message.chars().take(500).collect()),
+        cache_hit: false,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        input_tokens: input_tokens.max(0),
+        output_tokens: 0,
+        credits_used: 0.0,
+        special_settings: Vec::new(),
+    };
+    if let Err(e) = append_record(&records_path, &record) {
+        tracing::warn!("记录请求错误失败: {}", e);
+    }
 }
 
 fn canonical_json(value: &serde_json::Value) -> serde_json::Value {

@@ -22,6 +22,10 @@ use parking_lot::Mutex;
 /// API 调用响应（包含上游保护 guard，流式请求需持有到流结束）
 pub struct ApiCallResponse {
     pub response: reqwest::Response,
+    /// 实际使用的凭据 ID。
+    pub credential_id: u64,
+    /// 实际使用的账号显示名（优先邮箱）。
+    pub credential_name: Option<String>,
     /// 上游保护 guard，Drop 时释放 in-flight 槽位。
     /// 流式请求必须持有此 guard 直到流完全消费完毕。
     #[allow(dead_code)]
@@ -417,6 +421,8 @@ impl KiroProvider {
                 self.token_manager.report_success(ctx.id);
                 return Ok(ApiCallResponse {
                     response,
+                    credential_id: ctx.id,
+                    credential_name: ctx.credentials.email.clone(),
                     upstream_guard,
                 });
             }

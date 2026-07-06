@@ -27,7 +27,7 @@ use super::converter::{ConversionError, convert_request_with_models, get_context
 use super::failure_prompt_log;
 use super::kv_cache::{
     KvCacheRecordInput, build_prompt_hashes, estimate_prompt_block_tokens,
-    record_simulated_kv_cache,
+    record_request_error, record_request_error_with_credential, record_simulated_kv_cache,
 };
 use super::middleware::AppState;
 use super::stream::{BufferedStreamContext, SseEvent, StreamContext, extract_thinking_from_complete_text};
@@ -296,9 +296,12 @@ fn map_provider_error(
     endpoint: &'static str,
     model: &str,
     request_body: &str,
+    stream: bool,
+    input_tokens: i32,
     err: Error,
 ) -> Response {
     let err_str = err.to_string();
+    record_request_error(None, endpoint, model, stream, input_tokens, &err_str);
 
     // 记录 malformed request / tool call failed 对应的 prompt，便于后续排障。
     failure_prompt_log::maybe_record_failure_prompt(
@@ -708,10 +711,12 @@ async fn handle_stream_request(
     let api_response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
-            return map_provider_error(provider.as_ref(), endpoint, model, request_body, e);
+            return map_provider_error(provider.as_ref(), endpoint, model, request_body, true, input_tokens, e);
         }
     };
     let _upstream_guard = api_response.upstream_guard;
+    let credential_id = api_response.credential_id;
+    let credential_name = api_response.credential_name;
     let response = api_response.response;
 
     // 创建流处理上下文
@@ -731,6 +736,8 @@ async fn handle_stream_request(
         request_body.to_string(),
         prompt_hashes,
         block_tokens,
+        credential_id,
+        credential_name,
         special_settings,
     );
 
@@ -762,6 +769,8 @@ fn create_sse_stream(
     request_body: String,
     prompt_hashes: Vec<String>,
     block_tokens: Vec<i32>,
+    credential_id: u64,
+    credential_name: Option<String>,
     special_settings: Vec<String>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     // 先发送初始事件
@@ -788,6 +797,8 @@ fn create_sse_stream(
             false,
             prompt_hashes,
             block_tokens,
+            credential_id,
+            credential_name,
             special_settings,
         ),
         |(
@@ -803,6 +814,8 @@ fn create_sse_stream(
             mut failure_prompt_recorded,
             prompt_hashes,
             block_tokens,
+            credential_id,
+            credential_name,
             special_settings,
         )| async move {
             if finished {
@@ -847,6 +860,16 @@ fn create_sse_stream(
                                                     _ => None,
                                                 };
                                                 if let Some(error_text) = maybe_error {
+                                                    record_request_error_with_credential(
+                                                        None,
+                                                        endpoint,
+                                                        &model,
+                                                        credential_id,
+                                                        credential_name.clone(),
+                                                        true,
+                                                        ctx.input_tokens,
+                                                        &error_text,
+                                                    );
                                                     failure_prompt_recorded = failure_prompt_log::maybe_record_failure_prompt(
                                                         None,
                                                         endpoint,
@@ -888,6 +911,8 @@ fn create_sse_stream(
                                     failure_prompt_recorded,
                                     prompt_hashes,
                                     block_tokens,
+                                    credential_id,
+                                    credential_name,
                                     special_settings,
                                 ),
                             ))
@@ -904,9 +929,13 @@ fn create_sse_stream(
                                     stream: true,
                                     prompt_hashes: prompt_hashes.clone(),
                                     block_tokens: block_tokens.clone(),
+                                    credential_id,
+                                    credential_name: credential_name.clone(),
                                     input_tokens: estimated_input_tokens,
                                     output_tokens: final_output_tokens,
                                     credits_used,
+                                    is_error: true,
+                                    error_message: Some(e.to_string()),
                                     special_settings: special_settings.clone(),
                                 },
                             );
@@ -936,6 +965,8 @@ fn create_sse_stream(
                                     failure_prompt_recorded,
                                     prompt_hashes,
                                     block_tokens,
+                                    credential_id,
+                                    credential_name,
                                     special_settings,
                                 ),
                             ))
@@ -951,9 +982,13 @@ fn create_sse_stream(
                                     stream: true,
                                     prompt_hashes: prompt_hashes.clone(),
                                     block_tokens: block_tokens.clone(),
+                                    credential_id,
+                                    credential_name: credential_name.clone(),
                                     input_tokens: estimated_input_tokens,
                                     output_tokens: final_output_tokens,
                                     credits_used,
+                                    is_error: false,
+                                    error_message: None,
                                     special_settings: special_settings.clone(),
                                 },
                             );
@@ -983,6 +1018,8 @@ fn create_sse_stream(
                                     failure_prompt_recorded,
                                     prompt_hashes,
                                     block_tokens,
+                                    credential_id,
+                                    credential_name,
                                     special_settings,
                                 ),
                             ))
@@ -1008,6 +1045,8 @@ fn create_sse_stream(
                             failure_prompt_recorded,
                             prompt_hashes,
                             block_tokens,
+                            credential_id,
+                            credential_name,
                             special_settings,
                         ),
                     ))
@@ -1042,10 +1081,12 @@ async fn handle_non_stream_request(
     let api_response = match provider.call_api(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
-            return map_provider_error(provider.as_ref(), endpoint, model, request_body, e);
+            return map_provider_error(provider.as_ref(), endpoint, model, request_body, false, input_tokens, e);
         }
     };
     let _upstream_guard = api_response.upstream_guard;
+    let credential_id = api_response.credential_id;
+    let credential_name = api_response.credential_name;
     let response = api_response.response;
 
     // 读取响应体
@@ -1053,6 +1094,16 @@ async fn handle_non_stream_request(
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::error!("读取响应体失败: {}", e);
+            record_request_error_with_credential(
+                None,
+                endpoint,
+                model,
+                credential_id,
+                credential_name,
+                false,
+                input_tokens,
+                &e.to_string(),
+            );
             return (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse::new(
@@ -1149,6 +1200,16 @@ async fn handle_non_stream_request(
                         } => {
                             if !failure_prompt_recorded {
                                 let error_text = format!("{} - {}", error_code, error_message);
+                                record_request_error_with_credential(
+                                    None,
+                                    endpoint,
+                                    model,
+                                    credential_id,
+                                    credential_name.clone(),
+                                    false,
+                                    input_tokens,
+                                    &error_text,
+                                );
                                 failure_prompt_recorded =
                                     failure_prompt_log::maybe_record_failure_prompt(
                                         None,
@@ -1169,6 +1230,16 @@ async fn handle_non_stream_request(
                             }
                             if !failure_prompt_recorded {
                                 let error_text = format!("{} - {}", exception_type, message);
+                                record_request_error_with_credential(
+                                    None,
+                                    endpoint,
+                                    model,
+                                    credential_id,
+                                    credential_name.clone(),
+                                    false,
+                                    input_tokens,
+                                    &error_text,
+                                );
                                 failure_prompt_recorded =
                                     failure_prompt_log::maybe_record_failure_prompt(
                                         None,
@@ -1241,12 +1312,16 @@ async fn handle_non_stream_request(
         KvCacheRecordInput {
             endpoint,
             model: model.to_string(),
+            credential_id,
+            credential_name,
             stream: false,
             prompt_hashes,
             block_tokens,
             input_tokens,
             output_tokens,
             credits_used: request_credits_used,
+            is_error: false,
+            error_message: None,
             special_settings,
         },
     );
@@ -1554,10 +1629,12 @@ async fn handle_stream_request_buffered(
     let api_response = match provider.call_api_stream(request_body).await {
         Ok(resp) => resp,
         Err(e) => {
-            return map_provider_error(provider.as_ref(), endpoint, model, request_body, e);
+            return map_provider_error(provider.as_ref(), endpoint, model, request_body, true, estimated_input_tokens, e);
         }
     };
     let _upstream_guard = api_response.upstream_guard;
+    let credential_id = api_response.credential_id;
+    let credential_name = api_response.credential_name;
     let response = api_response.response;
 
     // 创建缓冲流处理上下文
@@ -1573,6 +1650,8 @@ async fn handle_stream_request_buffered(
         request_body.to_string(),
         prompt_hashes,
         block_tokens,
+        credential_id,
+        credential_name,
         special_settings,
     );
 
@@ -1595,6 +1674,8 @@ fn create_buffered_sse_stream(
     request_body: String,
     prompt_hashes: Vec<String>,
     block_tokens: Vec<i32>,
+    credential_id: u64,
+    credential_name: Option<String>,
     special_settings: Vec<String>,
 ) -> impl Stream<Item = Result<Bytes, Infallible>> {
     let body_stream = response.bytes_stream();
@@ -1613,6 +1694,8 @@ fn create_buffered_sse_stream(
             false,
             prompt_hashes,
             block_tokens,
+            credential_id,
+            credential_name,
             special_settings,
         ),
         |(
@@ -1628,6 +1711,8 @@ fn create_buffered_sse_stream(
             mut failure_prompt_recorded,
             prompt_hashes,
             block_tokens,
+            credential_id,
+            credential_name,
             special_settings,
         )| async move {
             if finished {
@@ -1656,6 +1741,8 @@ fn create_buffered_sse_stream(
                                     failure_prompt_recorded,
                                     prompt_hashes,
                                     block_tokens,
+                                    credential_id,
+                                    credential_name,
                                     special_settings,
                                 ),
                             ));
@@ -1694,6 +1781,16 @@ fn create_buffered_sse_stream(
                                                         _ => None,
                                                     };
                                                     if let Some(error_text) = maybe_error {
+                                                        record_request_error_with_credential(
+                                                            None,
+                                                            endpoint,
+                                                            &model,
+                                                            credential_id,
+                                                            credential_name.clone(),
+                                                            true,
+                                                            ctx.estimated_input_tokens(),
+                                                            &error_text,
+                                                        );
                                                         failure_prompt_recorded = failure_prompt_log::maybe_record_failure_prompt(
                                                             None,
                                                             endpoint,
@@ -1727,9 +1824,13 @@ fn create_buffered_sse_stream(
                                         stream: true,
                                         prompt_hashes: prompt_hashes.clone(),
                                         block_tokens: block_tokens.clone(),
+                                        credential_id,
+                                        credential_name: credential_name.clone(),
                                         input_tokens: estimated_input_tokens,
                                         output_tokens: final_output_tokens,
                                         credits_used,
+                                        is_error: true,
+                                        error_message: Some(e.to_string()),
                                         special_settings: special_settings.clone(),
                                     },
                                 );
@@ -1771,6 +1872,8 @@ fn create_buffered_sse_stream(
                                         failure_prompt_recorded,
                                         prompt_hashes,
                                         block_tokens,
+                                        credential_id,
+                                        credential_name,
                                         special_settings,
                                     ),
                                 ));
@@ -1787,9 +1890,13 @@ fn create_buffered_sse_stream(
                                         stream: true,
                                         prompt_hashes: prompt_hashes.clone(),
                                         block_tokens: block_tokens.clone(),
+                                        credential_id,
+                                        credential_name: credential_name.clone(),
                                         input_tokens: estimated_input_tokens,
                                         output_tokens: final_output_tokens,
                                         credits_used,
+                                        is_error: false,
+                                        error_message: None,
                                         special_settings: special_settings.clone(),
                                     },
                                 );
@@ -1831,6 +1938,8 @@ fn create_buffered_sse_stream(
                                         failure_prompt_recorded,
                                         prompt_hashes,
                                         block_tokens,
+                                        credential_id,
+                                        credential_name,
                                         special_settings,
                                     ),
                                 ));

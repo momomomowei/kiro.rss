@@ -62,6 +62,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [queryingInfo, setQueryingInfo] = useState(false)
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
   const [refreshingModelCache, setRefreshingModelCache] = useState(false)
+  const [modelCacheProgress, setModelCacheProgress] = useState({ current: 0, total: 0 })
   const [batchRefreshing, setBatchRefreshing] = useState(false)
   const [batchRefreshProgress, setBatchRefreshProgress] = useState({ current: 0, total: 0 })
   const cancelVerifyRef = useRef(false)
@@ -86,9 +87,22 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const currentCredential = data?.credentials.find(c => c.id === data.currentId)
 
   const handleRefreshModelCache = async () => {
+    const ids = (data?.credentials ?? [])
+      .filter(credential => !credential.disabled)
+      .map(credential => credential.id)
+
+    if (ids.length === 0) {
+      toast.error('没有可刷新的启用凭据')
+      return
+    }
+
     setRefreshingModelCache(true)
+    setModelCacheProgress({ current: 0, total: ids.length })
+
     try {
+      setModelCacheProgress({ current: 1, total: ids.length })
       const res = await refreshModelCache()
+      setModelCacheProgress({ current: ids.length, total: ids.length })
       if (res.failed === 0) {
         toast.success(`模型缓存刷新完成：成功 ${res.refreshed} 个凭据，缓存 ${res.count} 个模型`)
       } else {
@@ -392,6 +406,34 @@ export function Dashboard({ onLogout }: DashboardProps) {
     }
   }
 
+  const handleRefreshBalance = async (id: number) => {
+    setLoadingBalanceIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+
+    try {
+      const balance = await getCredentialBalance(id, true)
+      setBalanceMap(prev => {
+        const next = new Map(prev)
+        next.set(id, balance)
+        saveBalanceMap(next)
+        return next
+      })
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+      toast.success('额度已刷新')
+    } catch (error) {
+      toast.error('刷新额度失败: ' + (error as Error).message)
+    } finally {
+      setLoadingBalanceIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    }
+  }
+
   // 批量验活
   const handleBatchVerify = async () => {
     if (selectedIds.size === 0) {
@@ -653,9 +695,12 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     variant="outline"
                     className="h-8 px-2.5 text-xs"
                     disabled={refreshingModelCache}
+                    aria-busy={refreshingModelCache}
                   >
                     <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${refreshingModelCache ? 'animate-spin' : ''}`} />
-                    刷新模型缓存
+                    {refreshingModelCache
+                      ? `刷新中 ${modelCacheProgress.current}/${modelCacheProgress.total}`
+                      : '刷新模型缓存'}
                   </Button>
                 )}
                 {selectedIds.size === 0 && data?.credentials && data.credentials.length > 0 && (
@@ -696,6 +741,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
                     onToggleSelect={() => toggleSelect(credential.id)}
                     balance={balanceMap.get(credential.id) || credential.balance || null}
                     loadingBalance={loadingBalanceIds.has(credential.id)}
+                    onRefreshBalance={handleRefreshBalance}
                     view={viewMode}
                   />
                 ))}

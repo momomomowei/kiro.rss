@@ -12,6 +12,7 @@ import {
   useKvCacheConfig,
   useSetKvCacheConfig,
 } from '@/hooks/use-credentials'
+import type { RequestDetailItem } from '@/types/api'
 import { extractErrorMessage } from '@/lib/utils'
 
 type RecordFilter = 'all' | 'hit' | 'miss'
@@ -49,6 +50,12 @@ function modelColor(model: string): string {
   if (normalized.includes('sonnet')) return 'text-blue-600 dark:text-blue-400'
   if (normalized.includes('haiku')) return 'text-emerald-600 dark:text-emerald-400'
   return ''
+}
+
+function credentialLabel(record: RequestDetailItem): string {
+  if (record.credentialName) return record.credentialName
+  if (record.credentialId > 0) return `#${record.credentialId}`
+  return '-'
 }
 
 function cacheRatioBar(ratio: number) {
@@ -106,9 +113,10 @@ export function RequestDetailsPanel() {
     const totalInput = records.reduce((sum, r) => sum + r.inputTokens + r.cachedTokens, 0)
     const totalOutput = records.reduce((sum, r) => sum + r.outputTokens, 0)
     const cacheHitCount = records.filter(r => r.cacheHit).length
-    return { totalCost, totalInput, totalOutput, cacheHitCount }
+    const errorCount = records.filter(r => r.isError).length
+    return { totalCost, totalInput, totalOutput, cacheHitCount, errorCount }
   }, [records])
-  const failedCount = records.filter(r => r.inputTokens + r.cachedTokens + r.outputTokens === 0).length
+  const failedCount = data?.summary?.errorCount ?? summary.errorCount
   const successCount = Math.max((data?.total ?? records.length) - failedCount, 0)
 
   const filteredRecords = records.filter(r => {
@@ -250,6 +258,7 @@ export function RequestDetailsPanel() {
                 <tr className="border-b bg-card">
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-left font-medium text-muted-foreground">时间</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-left font-medium text-muted-foreground">状态</th>
+                  <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-left font-medium text-muted-foreground">账号</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-left font-medium text-muted-foreground">端点</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-left font-medium text-muted-foreground">模型</th>
                   <th className="sticky top-0 z-10 whitespace-nowrap bg-card px-3 py-2 text-right font-medium text-muted-foreground">输入</th>
@@ -265,18 +274,37 @@ export function RequestDetailsPanel() {
                   <tr key={r.requestId + i} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="whitespace-nowrap px-3 py-2 text-muted-foreground tabular-nums">{formatTime(r.recordedAt)}</td>
                     <td className="px-3 py-2">
-                      <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${r.cacheHit ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
-                        {r.cacheHit ? 'HIT' : 'MISS'}
+                      <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                        r.isError
+                          ? 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300'
+                          : r.cacheHit
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                            : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                      }`}>
+                        {r.isError ? 'ERROR' : r.cacheHit ? 'HIT' : 'MISS'}
+                      </span>
+                    </td>
+                    <td className="max-w-[220px] px-3 py-2">
+                      <span className="block truncate text-muted-foreground" title={credentialLabel(r)}>
+                        {credentialLabel(r)}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{r.endpoint.replace('/v1/', '')}</td>
-                    <td className="max-w-[260px] px-3 py-2">
+                    <td className="max-w-[300px] px-3 py-2">
                       <span
                         className={`block truncate font-medium ${modelColor(r.model)}`}
                         title={r.model || '-'}
                       >
                         {r.model || '-'}
                       </span>
+                      {r.isError && r.errorMessage && (
+                        <span
+                          className="mt-0.5 block truncate text-[11px] text-red-600 dark:text-red-400"
+                          title={r.errorMessage}
+                        >
+                          {r.errorMessage}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(r.inputTokens)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">

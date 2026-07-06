@@ -48,7 +48,13 @@ struct KvCacheRecordRow {
     model: String,
     #[serde(default)]
     credential_id: u64,
+    #[serde(default)]
+    credential_name: Option<String>,
     stream: bool,
+    #[serde(default)]
+    is_error: bool,
+    #[serde(default)]
+    error_message: Option<String>,
     cache_hit: bool,
     cache_creation_input_tokens: i32,
     cache_read_input_tokens: i32,
@@ -134,6 +140,7 @@ impl AdminService {
                     priority: entry.priority,
                     disabled: entry.disabled,
                     failure_count: entry.failure_count,
+                    total_failure_count: entry.total_failure_count,
                     is_current: entry.id == snapshot.current_id,
                     expires_at: entry.expires_at,
                     auth_method: entry.auth_method,
@@ -788,7 +795,10 @@ impl AdminService {
             endpoint: row.endpoint,
             model: row.model,
             credential_id: row.credential_id,
+            credential_name: row.credential_name,
             stream: row.stream,
+            is_error: row.is_error,
+            error_message: row.error_message,
             cache_hit: row.cache_hit,
             input_tokens,
             cached_tokens,
@@ -819,6 +829,9 @@ impl AdminService {
             }
             if record.cache_hit {
                 summary.cache_hit_count += 1;
+            }
+            if record.is_error {
+                summary.error_count += 1;
             }
         }
 
